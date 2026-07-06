@@ -39,7 +39,14 @@ cat > "$KOUT/dataset-metadata.json" <<'JSON'
 JSON
 uvx kaggle datasets version -p "$KOUT" -m "backfill + funding/OI cache $(date +%F)"
 echo "  chờ Kaggle xử lý version mới..."
-sleep 90
+# chờ tới khi dataset ready (mount input của kernel mới có file), tối đa ~10 phút
+for i in $(seq 1 20); do
+  sleep 30
+  st=$(uvx kaggle datasets status vuongnguyen0909/cbot-btcusdt-dollar-bars 2>/dev/null || true)
+  echo "  [$i] dataset: $st"
+  [ "$st" = "ready" ] && break
+done
+sleep 30  # đệm thêm cho mount ổn định
 
 echo "== 4) Build + push kernel features =="
 tools/build_features_kernel.sh
