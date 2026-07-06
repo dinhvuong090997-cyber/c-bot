@@ -9,10 +9,28 @@ def _load_or_fetch(path, fetch, name):
     return fetch()
 
 
+def _resolve_input(default="/kaggle/input/cbot-btcusdt-dollar-bars"):
+    """Mount path của dataset có thể khác kỳ vọng — in cây input để chẩn đoán
+    rồi tìm dollar_bars.parquet ở bất kỳ đâu dưới /kaggle/input."""
+    if not _os.path.isdir("/kaggle/input"):
+        return default
+    print("cây /kaggle/input:")
+    hit = None
+    for root, _dirs, files in _os.walk("/kaggle/input"):
+        for f in files:
+            print("  ", _os.path.join(root, f))
+        if "dollar_bars.parquet" in files and hit is None:
+            hit = root
+    if hit is None:
+        print("  (không thấy dollar_bars.parquet ở đâu cả)")
+    return hit or default
+
+
 if __name__ == "__main__":
     _H = 3_600_000
-    IN = _os.environ.get("CBOT_IN", "/kaggle/input/cbot-btcusdt-dollar-bars")
+    IN = _os.environ.get("CBOT_IN") or _resolve_input()
     OUT = _os.environ.get("CBOT_OUT", "/kaggle/working")
+    print(f"IN = {IN}")
 
     bars = pd.read_parquet(f"{IN}/dollar_bars.parquet")
     t0, t1 = int(bars["t_close"].iloc[0]), int(bars["t_close"].iloc[-1])
