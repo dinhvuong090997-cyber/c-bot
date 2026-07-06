@@ -8,6 +8,7 @@ dependencies = [
     "numpy>=1.26",
     "pyarrow>=14",
     "requests>=2.31",
+    "torch>=2.2",
 ]
 
 [dependency-groups]
@@ -19,3 +20,12 @@ pythonpath = ["."]
 
 [tool.uv]
 package = false
+
+# local dùng wheel CPU cho nhẹ; trên Kaggle torch GPU có sẵn
+[[tool.uv.index]]
+name = "pytorch-cpu"
+url = "https://download.pytorch.org/whl/cpu"
+explicit = true
+
+[tool.uv.sources]
+torch = [{ index = "pytorch-cpu" }]
