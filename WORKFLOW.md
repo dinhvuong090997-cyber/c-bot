@@ -119,20 +119,67 @@ model nói LÊN (dương là tốt) trừ khi nói XUỐNG. `edge_conf0.40` là 
 dùng để xếp hạng sweep (đủ volume lệnh để thống kê đáng tin, lọc trial có
 `n_conf0.40 < 200`).
 
+## 5. Model final — kernel `cbot-train-final`
+
+Chọn từ 216 trials sweep: `horizon=80, width_mult=1.0` là vùng có edge
+**thật** (không phải artifact của accuracy cao do barrier hẹp — xem giải
+thích ở `sweep.py`/kết quả sweep). Config chốt: `hidden=(64,32),
+dropout=0.1, lr=3e-4, weight_decay=1e-3` — đây là dòng duy nhất trong
+sweep có edge tăng đơn điệu theo confidence threshold với n vẫn đủ lớn ở
+mọi bước (bằng chứng calibration tốt, không phải trúng số 1 điểm dữ liệu).
+
+```bash
+tools/build_train_final_kernel.sh        # gộp model/*.py + kernel_train_final_runner.py
+uvx kaggle kernels push -p kernel_train_final
+uvx kaggle kernels status vuongnguyen0909/cbot-train-final
+uvx kaggle kernels output vuongnguyen0909/cbot-train-final -p out/train_final/
+```
+
+Output: `model_final.pt` (state_dict + norm_mean/std + feature_cols +
+label_config để nạp lại đúng chuẩn hoá) + `metrics_final.json`.
+
+Train local (CPU, 1 config, chậm hơn nhiều — chỉ dùng khi không cần
+Kaggle): `model/run_training.py` giờ nhận thêm `--width-mult --hidden
+--dropout --lr --weight-decay`.
+
+## 6. Backtest — `backtest/`
+
+`backtest/engine.py`: lọc lệnh theo confidence threshold (bỏ dự đoán
+"ngang"), trừ phí round-trip, tính win_rate/mean_net_ret/Sharpe (annualize
+theo thời gian thực vì dollar bar không đều)/max_drawdown/trades_per_day.
+**Đơn giản hoá v1**: mỗi event coi là 1 lệnh độc lập 100% vốn, KHÔNG có
+concurrent bet sizing (AFML) — `equity_curve`/`max_drawdown` chỉ để so
+sánh tương đối giữa threshold, không phải equity thật của bot có risk
+management. Số đáng tin để đọc: `mean_net_ret`, `sharpe`, `win_rate`.
+
+```bash
+uv run python -m backtest.run_backtest \
+    --bars data/cache/backfill/dollar_bars.parquet \
+    --features out/features_2y.parquet \
+    --model out/train_final/model_final.pt
+```
+
+**Kết quả model final (test set 2026-01-29→2026-07-05, phí Bybit taker
+round-trip 0.11%)**: hoà vốn ở threshold **0.45** (~11.6 lệnh/ngày), edge
+dương thật chỉ từ threshold **0.50** (Sharpe ~1.0, win rate 58%, nhưng chỉ
+~1.5 lệnh/ngày, n=190 — mẫu còn mỏng, chưa đủ tin cậy để live). Dưới 0.40,
+phí ăn hết edge.
+
 ## Test
 
 ```bash
-uv run pytest tests/ -q        # 71 tests, TDD toàn bộ, ~11s
+uv run pytest tests/ -q        # 87 tests, TDD toàn bộ, ~36s
 ```
 
 ## Việc còn lại (chưa làm)
 
-- Chọn config tốt nhất từ `sweep_results.csv`, train bản "final" full data
+- Backtest hiện chưa có concurrent bet sizing (AFML) — mỗi lệnh đang tính
+  độc lập 100% vốn, cần sizing thật trước khi đọc equity curve nghiêm túc
+- Cần thêm data/thời gian để n_trades ở threshold 0.50 đủ lớn, hoặc tìm
+  cách tăng edge (feature mới, model khác) thay vì chỉ raise threshold
 - Dọn kernel `cbot-dollar-bars` vào repo chính thức `bars/` thay vì nằm ở
   scratchpad (hiện tại `bars/pipeline.py` là logic core, nhưng script
   Kaggle runner riêng vẫn ở ngoài repo)
 - `llm/`: prompt + parse cho lớp veto
 - `risk/`: hard rules (position size, max drawdown, ...)
-- `backtest/`: engine chạy model + LLM veto + risk trên test set, tính
-  Sharpe/drawdown/turnover có tính phí
 - `execution/`, `live/`: để sau, ngoài scope v1

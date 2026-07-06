@@ -43,12 +43,19 @@ def main():
     p.add_argument("--features", required=True)
     p.add_argument("--out", required=True)
     p.add_argument("--horizon", type=int, default=50)
+    p.add_argument("--width-mult", type=float, default=1.0)
     p.add_argument("--epochs", type=int, default=100)
+    p.add_argument("--hidden", type=str, default="128,64",
+                    help="vd: 64,32")
+    p.add_argument("--dropout", type=float, default=0.2)
+    p.add_argument("--lr", type=float, default=1e-3)
+    p.add_argument("--weight-decay", type=float, default=1e-4)
     a = p.parse_args()
+    hidden = tuple(int(h) for h in a.hidden.split(","))
 
     print("1) labels (triple-barrier)...")
     bars = pd.read_parquet(a.bars)
-    lcfg = LabelConfig(horizon=a.horizon, width_mult=1.0)
+    lcfg = LabelConfig(horizon=a.horizon, width_mult=a.width_mult)
     labels = triple_barrier(bars, lcfg)
     ok = labels[labels.complete & ~labels.ambiguous]
     dist = ok.label.value_counts(normalize=True).sort_index()
@@ -64,7 +71,8 @@ def main():
         print(f"   {part}: {len(ds[f'y_{part}']):,} | {t0:%Y-%m-%d} -> {t1:%Y-%m-%d}")
 
     print("3) train...")
-    tcfg = TrainConfig(epochs=a.epochs)
+    tcfg = TrainConfig(epochs=a.epochs, hidden=hidden, dropout=a.dropout,
+                        lr=a.lr, weight_decay=a.weight_decay)
     result = train_model(ds["X_train"], ds["y_train"], ds["X_val"], ds["y_val"],
                          tcfg, log_every=1)
     print(f"   best epoch {result['best_epoch']}: val_loss={result['val_loss']:.4f} "
