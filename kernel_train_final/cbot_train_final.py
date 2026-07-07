@@ -186,6 +186,7 @@ class TrainConfig:
     dropout: float = 0.2
     seed: int = 42
     device: str = ""            # "" = tự chọn cuda nếu có
+    class_weight: str = ""      # "" = không; "balanced" = trọng số nghịch tần suất train
 
 
 def train_model(X_train: np.ndarray, y_train: np.ndarray,
@@ -196,7 +197,12 @@ def train_model(X_train: np.ndarray, y_train: np.ndarray,
 
     net = DirectionNet(X_train.shape[1], hidden=cfg.hidden, dropout=cfg.dropout).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    loss_fn = nn.CrossEntropyLoss()
+    if cfg.class_weight == "balanced":
+        counts = np.bincount(y_train, minlength=3).astype(np.float64)
+        w = counts.sum() / (3 * counts)
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(w, dtype=torch.float32).to(dev))
+    else:
+        loss_fn = nn.CrossEntropyLoss()
 
     train_dl = DataLoader(
         TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train)),
@@ -272,7 +278,15 @@ if __name__ == "__main__":
     print(f"bars:     {bars_path}")
     print(f"features: {feat_path}")
 
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    # P100 (sm_60) không còn trong torch build sẵn của Kaggle -> thử 1 op
+    # thật trước khi commit dùng GPU, hỏng thì fallback CPU (MLP nhỏ, CPU đủ)
+    dev = "cpu"
+    if torch.cuda.is_available():
+        try:
+            (torch.zeros(1, device="cuda") + 1).item()
+            dev = "cuda"
+        except Exception as e:
+            print(f"GPU khong dung duoc ({type(e).__name__}), fallback CPU")
     print(f"device: {dev}")
 
     # config chọn từ sweep 216 trials: horizon=80/width_mult=1.0 là vùng edge

@@ -15,7 +15,8 @@ import numpy as np
 import pandas as pd
 import torch
 
-from backtest.engine import BacktestConfig, evaluate_thresholds
+from backtest.engine import BacktestConfig, evaluate_maker, evaluate_thresholds
+from backtest.fills import FillConfig, simulate_trades
 from model.dataset import DatasetConfig, build_dataset
 from model.labels import LabelConfig, triple_barrier
 from model.net import DirectionNet
@@ -26,8 +27,11 @@ def main():
     p.add_argument("--bars", required=True)
     p.add_argument("--features", required=True)
     p.add_argument("--model", required=True)
+    p.add_argument("--mode", choices=("maker", "taker"), default="maker",
+                    help="maker = mô phỏng limit fill trên OHLC; taker = v1")
+    p.add_argument("--entry-wait-bars", type=int, default=3)
     p.add_argument("--fee-round-trip", type=float, default=0.0011,
-                    help="Bybit perp taker ~0.055%%/bên x2 (mặc định)")
+                    help="chỉ dùng cho --mode taker (0.055%%/bên x2)")
     a = p.parse_args()
 
     ckpt = torch.load(a.model, map_location="cpu", weights_only=False)
@@ -58,8 +62,33 @@ def main():
     conf = probs.max(axis=1)
 
     cfg = BacktestConfig(fee_round_trip=a.fee_round_trip)
-    df = evaluate_thresholds(pred, conf, ds["ret_test"], ds["t_test"], cfg)
-    pd.set_option("display.width", 160)
+    pd.set_option("display.width", 200)
+
+    if a.mode == "taker":
+        df = evaluate_thresholds(pred, conf, ds["ret_test"], ds["t_test"], cfg)
+        print(df.to_string(index=False))
+        return
+
+    # maker: map event test -> bar index rồi mô phỏng limit fill trên OHLC.
+    # searchsorted thay vì index lookup: t_close có thể trùng giữa các bar
+    # liên tiếp (khối lượng lớn), lấy bar đầu tiên khớp timestamp.
+    bars = bars.sort_values("t_close", ignore_index=True)
+    bars_t = bars["t_close"].to_numpy()
+    directional = pred != 1
+    bar_idx = np.searchsorted(bars_t, ds["t_test"][directional])
+    assert (bars_t[bar_idx] == ds["t_test"][directional]).all()
+    signals = pd.DataFrame({
+        "bar_idx": bar_idx,
+        "direction": np.where(pred[directional] == 2, 1, -1),
+        "confidence": conf[directional],
+    })
+    fcfg = FillConfig(entry_wait_bars=a.entry_wait_bars)
+    trades = simulate_trades(bars, signals, lcfg, fcfg)
+    df = evaluate_maker(trades, cfg)
+    if len(trades) and (fill_rate := trades["filled"].mean()) < 0.20:
+        print(f"CẢNH BÁO: fill_rate tổng = {fill_rate:.1%} < 20% — nghi logic sai")
+    print(f"mode=maker  entry_wait_bars={a.entry_wait_bars}  "
+          f"maker={fcfg.maker_fee:.2%} taker={fcfg.taker_fee:.3%}")
     print(df.to_string(index=False))
 
 

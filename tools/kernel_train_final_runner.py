@@ -35,7 +35,15 @@ if __name__ == "__main__":
     print(f"bars:     {bars_path}")
     print(f"features: {feat_path}")
 
-    dev = "cuda" if torch.cuda.is_available() else "cpu"
+    # P100 (sm_60) không còn trong torch build sẵn của Kaggle -> thử 1 op
+    # thật trước khi commit dùng GPU, hỏng thì fallback CPU (MLP nhỏ, CPU đủ)
+    dev = "cpu"
+    if torch.cuda.is_available():
+        try:
+            (torch.zeros(1, device="cuda") + 1).item()
+            dev = "cuda"
+        except Exception as e:
+            print(f"GPU khong dung duoc ({type(e).__name__}), fallback CPU")
     print(f"device: {dev}")
 
     # config chọn từ sweep 216 trials: horizon=80/width_mult=1.0 là vùng edge

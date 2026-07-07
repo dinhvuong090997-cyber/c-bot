@@ -1,0 +1,16 @@
+{
+  "id": "vuongnguyen0909/cbot-train-wm07",
+  "title": "cbot-train-wm07",
+  "code_file": "cbot_train_wm07.py",
+  "language": "python",
+  "kernel_type": "script",
+  "is_private": true,
+  "enable_gpu": true,
+  "enable_internet": true,
+  "dataset_sources": [
+    "vuongnguyen0909/cbot-btcusdt-dollar-bars"
+  ],
+  "kernel_sources": [
+    "vuongnguyen0909/cbot-features"
+  ]
+}

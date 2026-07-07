@@ -69,6 +69,46 @@ def sharpe_ratio(net_ret: np.ndarray, t_close: np.ndarray) -> float:
     return float(net_ret.mean() / sigma * np.sqrt(trades_per_year))
 
 
+def evaluate_maker(trades: pd.DataFrame, cfg: BacktestConfig) -> pd.DataFrame:
+    """Tổng hợp output của fills.simulate_trades theo confidence threshold.
+
+    fill_rate = tỷ lệ tín hiệu khớp entry (kể cả trade incomplete ở mép
+    data); thống kê PnL chỉ tính trade filled & complete, sort theo t_exit.
+    """
+    rows = []
+    for th in cfg.conf_thresholds:
+        sig = trades[trades["confidence"] >= th]
+        usable = sig[sig["filled"] & sig["complete"]].sort_values("t_exit")
+        net = usable["net_ret"].to_numpy()
+        t_exit = usable["t_exit"].to_numpy()
+        n = len(net)
+        row = {"threshold": th, "n_signals": len(sig),
+               "fill_rate": float(sig["filled"].mean()) if len(sig) else float("nan"),
+               "n_trades": n}
+        if n == 0:
+            row.update(win_rate=float("nan"), mean_net_ret=float("nan"),
+                       sharpe=float("nan"), max_drawdown=float("nan"),
+                       total_return=float("nan"), trades_per_day=0.0,
+                       n_tp=0, n_sl=0, n_vertical=0)
+            rows.append(row)
+            continue
+        eq = equity_curve(net)
+        span_days = (t_exit[-1] - t_exit[0]) / MS_PER_DAY
+        counts = usable["exit_type"].value_counts()
+        row.update(
+            win_rate=float((net > 0).mean()),
+            mean_net_ret=float(net.mean()),
+            sharpe=sharpe_ratio(net, t_exit),
+            max_drawdown=max_drawdown(eq),
+            total_return=float(eq[-1] - 1),
+            trades_per_day=n / span_days if span_days > 0 else float("nan"),
+            n_tp=int(counts.get("tp", 0)), n_sl=int(counts.get("sl", 0)),
+            n_vertical=int(counts.get("vertical", 0)),
+        )
+        rows.append(row)
+    return pd.DataFrame(rows)
+
+
 def evaluate_thresholds(pred: np.ndarray, prob: np.ndarray, ret: np.ndarray,
                         t_close: np.ndarray, cfg: BacktestConfig) -> pd.DataFrame:
     rows = []
