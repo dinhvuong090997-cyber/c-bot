@@ -57,15 +57,21 @@ VETO_SCHEMA = {
 }
 
 
+_DEFAULT_MODEL = {"anthropic": "claude-opus-4-8", "deepseek": "deepseek-chat"}
+
+
 @dataclass
 class VetoConfig:
-    model: str = "claude-opus-4-8"
+    provider: str = "anthropic"  # "anthropic" | "deepseek"
+    model: str = ""              # rỗng = mặc định theo provider
     max_tokens: int = 256
     timeout_s: float = 30.0
     history_max: int = 10  # số quyết định gần nhất nhớ trong prompt
     anomaly: AnomalyConfig = None  # type: ignore[assignment]
 
     def __post_init__(self):
+        if not self.model:
+            self.model = _DEFAULT_MODEL[self.provider]
         if self.anomaly is None:
             self.anomaly = AnomalyConfig()
 
@@ -151,9 +157,50 @@ def _render_history(entries) -> str:
     return "\n".join(lines)
 
 
+class DeepSeekClient:
+    """Wrapper mỏng cho API OpenAI-compatible của DeepSeek (requests, không
+    thêm SDK). json_object mode cần chữ "JSON" trong prompt — SYSTEM_PROMPT
+    đã có. deepseek-reasoner có thể bọc JSON trong prose/fence — caller
+    parse bằng _parse_json_loose."""
+
+    BASE_URL = "https://api.deepseek.com"
+
+    def __init__(self, api_key: str, timeout_s: float = 30.0):
+        self.api_key = api_key
+        self.timeout_s = timeout_s
+
+    def complete(self, system: str, user: str, model: str,
+                 max_tokens: int) -> str:
+        import requests
+
+        r = requests.post(
+            f"{self.BASE_URL}/chat/completions",
+            headers={"Authorization": f"Bearer {self.api_key}"},
+            json={"model": model,
+                  "messages": [{"role": "system", "content": system},
+                               {"role": "user", "content": user}],
+                  "response_format": {"type": "json_object"},
+                  "max_tokens": max_tokens, "temperature": 0.0},
+            timeout=self.timeout_s)
+        r.raise_for_status()
+        return r.json()["choices"][0]["message"]["content"]
+
+
+def _parse_json_loose(text: str) -> dict:
+    """JSON thuần, hoặc bọc trong ```fence```/prose (kiểu reasoner)."""
+    try:
+        return json.loads(text)
+    except ValueError:
+        start, end = text.find("{"), text.rfind("}")
+        if start == -1 or end <= start:
+            raise
+        return json.loads(text[start:end + 1])
+
+
 class LLMVeto:
-    """client inject được để test; mặc định anthropic.Anthropic()
-    (đọc ANTHROPIC_API_KEY từ env).
+    """client inject được để test; mặc định dựng theo cfg.provider:
+    anthropic.Anthropic() (ANTHROPIC_API_KEY) hoặc DeepSeekClient
+    (DEEPSEEK_API_KEY).
 
     Gate 3 tầng trước khi LLM được phán (ý tưởng pa-model, chuyển thể):
       1. sanity_errors -> veto thẳng (data hỏng thì không trade).
@@ -166,8 +213,13 @@ class LLMVeto:
     def __init__(self, cfg: VetoConfig = VetoConfig(), client=None):
         self.cfg = cfg
         if client is None:
-            import anthropic
-            client = anthropic.Anthropic(timeout=cfg.timeout_s)
+            if cfg.provider == "deepseek":
+                import os
+                client = DeepSeekClient(os.environ["DEEPSEEK_API_KEY"],
+                                        timeout_s=cfg.timeout_s)
+            else:
+                import anthropic
+                client = anthropic.Anthropic(timeout=cfg.timeout_s)
         self.client = client
         self.history: deque[dict] = deque(maxlen=cfg.history_max)
         self._counts = {"n_reviews": 0, "n_auto": 0, "n_sanity": 0,
@@ -212,25 +264,54 @@ class LLMVeto:
 
     def _ask_llm(self, ctx: dict, flags: list[str]) -> VetoDecision:
         try:
-            resp = self.client.messages.create(
-                model=self.cfg.model,
-                max_tokens=self.cfg.max_tokens,
-                system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_prompt(
-                    ctx, flags, _render_history(self.history))}],
-                output_config={
-                    "format": {"type": "json_schema", "schema": VETO_SCHEMA},
-                    "effort": "low",
-                },
-            )
-            text = next(b.text for b in resp.content
-                        if getattr(b, "type", "") == "text")
-            data = json.loads(text)
+            prompt = build_prompt(ctx, flags, _render_history(self.history))
+            if self.cfg.provider == "deepseek":
+                text = self.client.complete(SYSTEM_PROMPT, prompt,
+                                            self.cfg.model,
+                                            self.cfg.max_tokens)
+                data = _parse_json_loose(text)
+            else:
+                resp = self.client.messages.create(
+                    model=self.cfg.model,
+                    max_tokens=self.cfg.max_tokens,
+                    system=SYSTEM_PROMPT,
+                    messages=[{"role": "user", "content": prompt}],
+                    output_config={
+                        "format": {"type": "json_schema",
+                                   "schema": VETO_SCHEMA},
+                        "effort": "low",
+                    },
+                )
+                text = next(b.text for b in resp.content
+                            if getattr(b, "type", "") == "text")
+                data = json.loads(text)
+            if data.get("decision") not in ("approve", "veto"):
+                raise ValueError(f"decision không hợp lệ: {data.get('decision')!r}")
             approve = data["decision"] == "approve"
             self._counts["n_llm_approve" if approve else "n_llm_veto"] += 1
-            return VetoDecision(approve=approve, reason=data["reason"],
+            return VetoDecision(approve=approve,
+                                reason=str(data.get("reason", "")),
                                 source="llm")
         except Exception as e:
             self._counts["n_fail_open"] += 1
             return VetoDecision(approve=True, source="fail_open",
                                 reason=f"fail-open: {type(e).__name__}: {e}")
+
+
+def veto_from_env(provider: str = "auto") -> LLMVeto | None:
+    """Dựng LLMVeto theo key có trong env. auto: ưu tiên anthropic, rồi
+    deepseek; không có key nào -> None (tắt lớp LLM)."""
+    import os
+
+    if provider == "auto":
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            provider = "anthropic"
+        elif os.environ.get("DEEPSEEK_API_KEY"):
+            provider = "deepseek"
+        else:
+            return None
+    key_var = {"anthropic": "ANTHROPIC_API_KEY",
+               "deepseek": "DEEPSEEK_API_KEY"}[provider]
+    if not os.environ.get(key_var):
+        raise SystemExit(f"provider {provider} cần env {key_var}")
+    return LLMVeto(VetoConfig(provider=provider))

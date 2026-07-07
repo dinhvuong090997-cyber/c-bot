@@ -219,6 +219,88 @@ class TestSessionMemory:
         assert len(veto.history) == veto.cfg.history_max
 
 
+class FakeDeepSeek:
+    """Giả DeepSeekClient: chỉ cần .complete(system, user, model, max_tokens)."""
+
+    def __init__(self, text):
+        self.text = text
+        self.last = None
+
+    def complete(self, system, user, model, max_tokens):
+        self.last = {"system": system, "user": user, "model": model,
+                     "max_tokens": max_tokens}
+        return self.text
+
+
+class TestDeepSeekProvider:
+    def make(self, text):
+        from llm.veto import VetoConfig
+        client = FakeDeepSeek(text)
+        return LLMVeto(VetoConfig(provider="deepseek"), client=client), client
+
+    def test_default_model_per_provider(self):
+        from llm.veto import VetoConfig
+        assert VetoConfig().model == "claude-opus-4-8"
+        assert VetoConfig(provider="deepseek").model == "deepseek-chat"
+
+    def test_veto_via_deepseek(self):
+        veto, client = self.make('{"decision": "veto", "reason": "OI shock"}')
+        d = veto.review(make_bars(), make_feat(anomalous=True), make_sig())
+        assert d.approve is False
+        assert d.source == "llm"
+        assert client.last["model"] == "deepseek-chat"
+        assert client.last["system"] == SYSTEM_PROMPT
+
+    def test_fenced_json_parsed(self):
+        # deepseek-reasoner hay bọc ```json ...``` hoặc kèm prose
+        veto, _ = self.make(
+            'Here is my analysis.\n```json\n'
+            '{"decision": "approve", "reason": "ok"}\n```')
+        d = veto.review(make_bars(), make_feat(anomalous=True), make_sig())
+        assert d.approve is True
+        assert d.source == "llm"
+
+    def test_invalid_decision_fails_open(self):
+        veto, _ = self.make('{"decision": "maybe", "reason": "?"}')
+        d = veto.review(make_bars(), make_feat(anomalous=True), make_sig())
+        assert d.approve is True
+        assert d.source == "fail_open"
+
+    def test_calm_regime_still_auto(self):
+        veto, client = self.make('{"decision": "veto", "reason": "x"}')
+        d = veto.review(make_bars(), make_feat(), make_sig())
+        assert d.source == "auto"
+        assert client.last is None
+
+
+class TestVetoFromEnv:
+    def test_deepseek_when_only_deepseek_key(self, monkeypatch):
+        from llm.veto import veto_from_env
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        veto = veto_from_env()
+        assert veto is not None
+        assert veto.cfg.provider == "deepseek"
+
+    def test_anthropic_preferred_when_both(self, monkeypatch):
+        from llm.veto import veto_from_env
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        assert veto_from_env().cfg.provider == "anthropic"
+
+    def test_explicit_provider_overrides(self, monkeypatch):
+        from llm.veto import veto_from_env
+        monkeypatch.setenv("ANTHROPIC_API_KEY", "sk-ant-test")
+        monkeypatch.setenv("DEEPSEEK_API_KEY", "sk-test")
+        assert veto_from_env("deepseek").cfg.provider == "deepseek"
+
+    def test_none_when_no_keys(self, monkeypatch):
+        from llm.veto import veto_from_env
+        monkeypatch.delenv("ANTHROPIC_API_KEY", raising=False)
+        monkeypatch.delenv("DEEPSEEK_API_KEY", raising=False)
+        assert veto_from_env() is None
+
+
 class TestStats:
     def test_counters(self):
         veto, _ = make_veto({"decision": "veto", "reason": "x"})

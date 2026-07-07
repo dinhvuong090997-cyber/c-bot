@@ -199,7 +199,10 @@ def main():
     p.add_argument("--live", action="store_true",
                    help="TIỀN THẬT trên api.bybit.com (BYBIT_API_KEY/SECRET)")
     p.add_argument("--no-llm", action="store_true",
-                   help="tắt lớp LLM veto (mặc định bật nếu có ANTHROPIC_API_KEY)")
+                   help="tắt lớp LLM veto (mặc định bật nếu có API key LLM)")
+    p.add_argument("--llm-provider", choices=("auto", "anthropic", "deepseek"),
+                   default="auto",
+                   help="auto = ANTHROPIC_API_KEY trước, rồi DEEPSEEK_API_KEY")
     a = p.parse_args()
     if a.dry_run and a.live:
         raise SystemExit("--dry-run và --live loại trừ nhau")
@@ -231,12 +234,13 @@ def main():
 
     veto = None
     if not a.no_llm:
-        if os.environ.get("ANTHROPIC_API_KEY"):
-            from llm.veto import LLMVeto
-            veto = LLMVeto()
-            print(f"LLM veto: BẬT ({veto.cfg.model}, fail-open khi lỗi API)")
+        from llm.veto import veto_from_env
+        veto = veto_from_env(a.llm_provider)
+        if veto is not None:
+            print(f"LLM veto: BẬT ({veto.cfg.provider}/{veto.cfg.model}, "
+                  "fail-open khi lỗi API)")
         else:
-            print("LLM veto: TẮT — không có ANTHROPIC_API_KEY "
+            print("LLM veto: TẮT — không có ANTHROPIC_API_KEY/DEEPSEEK_API_KEY "
                   "(dùng --no-llm để tắt chủ động)")
 
     tm = TradeManager(exchange, ExecConfig(symbol=a.symbol, qty=a.qty))
