@@ -45,7 +45,7 @@ class Config:
     # tỉ USD/ngày -> muốn "vài trăm bar/ngày" thì ngưỡng phải cỡ
     # 10-20 triệu USD. Bắt buộc tune lại sau khi chạy verify_bars trên
     # data thật (xem median_seconds_per_bar).
-    DOLLAR_THRESHOLD = 20_000_000.0
+    DOLLAR_THRESHOLD = 10_000_000.0
 
     # Outlier: lệch quá X lần so với median TRAILING trong cửa sổ lăn.
     OUTLIER_WINDOW = 500          # số trade (chỉ nhìn quá khứ)
