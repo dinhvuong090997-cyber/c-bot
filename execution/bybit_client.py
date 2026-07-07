@@ -24,6 +24,7 @@ from urllib.parse import urlencode
 import requests
 
 DEMO_URL = "https://api-demo.bybit.com"
+MAINNET_URL = "https://api.bybit.com"  # TIỀN THẬT — key qua BYBIT_API_KEY/SECRET
 
 # BTCUSDT linear perp (xác nhận lại bằng get_instrument nếu đổi symbol)
 PRICE_TICK = 0.1

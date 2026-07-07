@@ -1,19 +1,25 @@
-"""Vòng lặp demo-live: WS trades -> dollar bars -> features -> model -> lệnh.
+"""Vòng lặp live: WS trades -> dollar bars -> features -> model -> LLM veto -> lệnh.
 
-Hai chế độ:
+Ba chế độ:
   --dry-run : không cần API key. Fill giả tại giá limit, TP/SL check bằng
               high/low bar — chỉ để xem pipeline chạy, PnL không có ý nghĩa
               fill thật (không có queue position, không adverse selection).
-  mặc định  : gửi lệnh THẬT lên Bybit DEMO (api-demo.bybit.com, tiền ảo).
-              Cần env BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET
-              (tạo trong Demo Trading trên bybit.com).
+  mặc định  : gửi lệnh lên Bybit DEMO (api-demo.bybit.com, tiền ảo).
+              Cần env BYBIT_DEMO_API_KEY / BYBIT_DEMO_API_SECRET.
+  --live    : TIỀN THẬT trên api.bybit.com. Cần env BYBIT_API_KEY /
+              BYBIT_API_SECRET (key mainnet, chỉ cấp quyền trade derivatives,
+              KHÔNG withdraw). Bắt đầu với --qty nhỏ nhất (0.001 BTC).
+
+LLM veto: bật mặc định nếu có ANTHROPIC_API_KEY (Claude duyệt từng tín
+hiệu, chỉ có quyền chặn — không có quyền vào lệnh; lỗi API = fail-open).
+Tắt bằng --no-llm.
 
 Warmup: cần 51 bars (~2-4h với threshold $10M) trước tín hiệu đầu tiên —
-cứ để chạy. Mọi event ghi JSONL vào out/demo/ để phân tích fill-rate sau.
+cứ để chạy. Mọi event ghi JSONL vào journal-dir để phân tích sau.
 
 Dùng:
     python -m live.run_demo --ckpt out/train_final/model_final.pt \
-        --threshold 0.45 --qty 0.001 [--dry-run]
+        --threshold 0.45 --qty 0.001 [--dry-run | --live] [--no-llm]
 """
 from __future__ import annotations
 
@@ -27,7 +33,7 @@ import pandas as pd
 
 from bars.pipeline import Config
 from data.bybit_api import fetch_funding_history, fetch_oi_history
-from execution.bybit_client import DEMO_URL, BybitClient
+from execution.bybit_client import DEMO_URL, MAINNET_URL, BybitClient
 from execution.order_manager import ExecConfig, TradeManager
 from live.bar_stream import LiveBarFeed, run_ws
 from live.features_live import ALL_FEATURE_COLS, WARMUP_BARS, latest_features
@@ -75,10 +81,12 @@ class DryRunExchange:
 
 class DemoRunner:
     def __init__(self, engine, tm: TradeManager, rm: RiskManager,
-                 journal_dir: Path, symbol: str, dry_ex: DryRunExchange | None):
+                 journal_dir: Path, symbol: str, dry_ex: DryRunExchange | None,
+                 veto=None):
         self.engine, self.tm, self.rm = engine, tm, rm
         self.symbol = symbol
         self.dry_ex = dry_ex
+        self.veto = veto  # llm.veto.LLMVeto | None (None = tắt lớp LLM)
         self.bars = pd.DataFrame()
         self.funding = pd.DataFrame({"ts": [], "funding_rate": []})
         self.oi = pd.DataFrame({"ts": [], "oi": []})
@@ -150,8 +158,20 @@ class DemoRunner:
         if sig is None:
             return
         self._jlog("signal", vars(sig))
+        self._act_on_signal(sig, feat, bar)
 
-        # 3) risk gate + đặt lệnh
+    def _act_on_signal(self, sig, feat, bar: dict) -> None:
+        """3) LLM veto (nếu bật) -> risk gate -> đặt lệnh."""
+        if self.veto is not None:
+            d = self.veto.review(self.bars, feat, sig)
+            self._jlog("veto", {"approve": d.approve, "reason": d.reason,
+                                "source": d.source, "side": sig.side})
+            if not d.approve:
+                print(f"LLM VETO {sig.side} conf={sig.conf:.2f}: {d.reason}")
+                return
+            if d.source == "fail_open":
+                print(f"LLM lỗi, fail-open: {d.reason}")
+
         ok, reason = self.rm.allow_entry(int(bar["t_close"]))
         if not ok:
             print(f"tín hiệu {sig.side} conf={sig.conf:.2f} bị chặn: {reason}")
@@ -173,7 +193,13 @@ def main():
     p.add_argument("--max-trades-per-day", type=int, default=30)
     p.add_argument("--daily-loss-limit", type=float, default=0.02)
     p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--live", action="store_true",
+                   help="TIỀN THẬT trên api.bybit.com (BYBIT_API_KEY/SECRET)")
+    p.add_argument("--no-llm", action="store_true",
+                   help="tắt lớp LLM veto (mặc định bật nếu có ANTHROPIC_API_KEY)")
     a = p.parse_args()
+    if a.dry_run and a.live:
+        raise SystemExit("--dry-run và --live loại trừ nhau")
 
     engine = engine_from_mlp_checkpoint(a.ckpt, conf_threshold=a.threshold)
     print(f"model: {a.ckpt} | horizon={engine.cfg.horizon} "
@@ -182,6 +208,15 @@ def main():
     if a.dry_run:
         exchange: object = DryRunExchange()
         print("chế độ DRY-RUN — không gửi lệnh thật")
+    elif a.live:
+        key = os.environ.get("BYBIT_API_KEY", "")
+        secret = os.environ.get("BYBIT_API_SECRET", "")
+        if not key or not secret:
+            raise SystemExit("--live cần env BYBIT_API_KEY / BYBIT_API_SECRET "
+                             "(key mainnet, chỉ quyền trade)")
+        exchange = BybitClient(key, secret, base_url=MAINNET_URL)
+        print(f"*** LIVE TIỀN THẬT: {MAINNET_URL} | qty={a.qty} BTC | "
+              f"equity={exchange.wallet_equity():,.2f} USDT ***")
     else:
         key = os.environ.get("BYBIT_DEMO_API_KEY", "")
         secret = os.environ.get("BYBIT_DEMO_API_SECRET", "")
@@ -191,11 +226,21 @@ def main():
         exchange = BybitClient(key, secret, base_url=DEMO_URL)
         print(f"demo API: {DEMO_URL} | equity={exchange.wallet_equity():,.0f} USDT")
 
+    veto = None
+    if not a.no_llm:
+        if os.environ.get("ANTHROPIC_API_KEY"):
+            from llm.veto import LLMVeto
+            veto = LLMVeto()
+            print(f"LLM veto: BẬT ({veto.cfg.model}, fail-open khi lỗi API)")
+        else:
+            print("LLM veto: TẮT — không có ANTHROPIC_API_KEY "
+                  "(dùng --no-llm để tắt chủ động)")
+
     tm = TradeManager(exchange, ExecConfig(symbol=a.symbol, qty=a.qty))
     rm = RiskManager(RiskConfig(max_trades_per_day=a.max_trades_per_day,
                                 daily_loss_limit=a.daily_loss_limit))
     runner = DemoRunner(engine, tm, rm, Path(a.journal_dir), a.symbol,
-                        exchange if a.dry_run else None)
+                        exchange if a.dry_run else None, veto=veto)
     runner.refresh_aux()
     print(f"funding: {len(runner.funding)} kỳ | OI: {len(runner.oi)} snapshots")
 
