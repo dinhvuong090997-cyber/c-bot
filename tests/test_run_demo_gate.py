@@ -34,6 +34,9 @@ class StubVeto:
         self.calls.append(sig)
         return self.decision
 
+    def stats(self):
+        return {}
+
 
 def make_sig(side="Buy"):
     return Signal(side=side, conf=0.5, entry_ref=100.0, tp_price=101.0,
@@ -87,3 +90,39 @@ def test_risk_gate_still_blocks_after_approve(tmp_path):
     rm.killed = True
     runner._act_on_signal(make_sig(), feat=None, bar={"t_close": T0})
     assert tm.submitted == []
+
+
+def test_exit_outcome_fed_back_to_veto(tmp_path):
+    """Lệnh đóng -> pnl được báo lại cho session memory của veto."""
+    class ExitingTM(StubTM):
+        def on_bar(self, bar):
+            return [{"event": "exited", "t": bar["t_close"], "side": "Buy",
+                     "entry_price": 100.0, "pnl_approx": 0.0015,
+                     "link_id": "x"}]
+
+    class RecordingVeto(StubVeto):
+        def __init__(self):
+            super().__init__(approve=True)
+            self.outcomes = []
+
+        def record_outcome(self, pnl):
+            self.outcomes.append(pnl)
+
+    veto = RecordingVeto()
+    runner, _, _ = make_runner(tmp_path, veto=veto)
+    runner.tm = ExitingTM()
+    runner._step({"t_close": T0, "open": 100.0, "high": 101.0, "low": 99.0,
+                  "close": 100.5, "vol_dollar": 1e7, "ofi": 0.1,
+                  "n_trades": 100})
+    assert veto.outcomes == [0.0015]
+
+
+def test_veto_event_journal_includes_stats(tmp_path):
+    class StatsVeto(StubVeto):
+        def stats(self):
+            return {"n_reviews": 7, "n_auto": 5}
+
+    runner, _, _ = make_runner(tmp_path, veto=StatsVeto(approve=True))
+    runner._act_on_signal(make_sig(), feat=None, bar={"t_close": T0})
+    rec = [r for r in read_journal(tmp_path) if r["kind"] == "veto"][0]
+    assert rec["stats"]["n_reviews"] == 7

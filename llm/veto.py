@@ -15,10 +15,13 @@ vài phút một lần nên 1-2s là thoải mái).
 from __future__ import annotations
 
 import json
+from collections import deque
 from dataclasses import dataclass
 from datetime import datetime, timezone
 
 import pandas as pd
+
+from llm.anomaly import AnomalyConfig, anomaly_flags, sanity_errors
 
 SYSTEM_PROMPT = """\
 You are the risk-control VETO layer of an automated BTCUSDT perpetual \
@@ -59,13 +62,19 @@ class VetoConfig:
     model: str = "claude-opus-4-8"
     max_tokens: int = 256
     timeout_s: float = 30.0
+    history_max: int = 10  # số quyết định gần nhất nhớ trong prompt
+    anomaly: AnomalyConfig = None  # type: ignore[assignment]
+
+    def __post_init__(self):
+        if self.anomaly is None:
+            self.anomaly = AnomalyConfig()
 
 
 @dataclass
 class VetoDecision:
     approve: bool
     reason: str
-    source: str  # "llm" | "fail_open"
+    source: str  # "llm" | "fail_open" | "auto" | "sanity"
 
 
 def build_market_context(bars: pd.DataFrame, feat: pd.Series, sig) -> dict:
@@ -110,16 +119,49 @@ def build_market_context(bars: pd.DataFrame, feat: pd.Series, sig) -> dict:
     }
 
 
-def build_prompt(ctx: dict) -> str:
+def build_prompt(ctx: dict, flags: list[str] | None = None,
+                 history: str = "") -> str:
     lines = "\n".join(f"{k}: {v}" for k, v in ctx.items())
-    return (f"New signal from the direction model:\n\n{lines}\n\n"
-            "Approve or veto this trade. Veto only for a concrete abnormal "
-            "condition visible in the data above.")
+    parts = [f"New signal from the direction model:\n\n{lines}"]
+    if flags:
+        parts.append("Pre-screen flagged these abnormal conditions "
+                     "(the reason you are being consulted):\n"
+                     + "\n".join(f"- {f}" for f in flags))
+    if history:
+        parts.append(history)
+    parts.append("Approve or veto this trade. Veto only for a concrete "
+                 "abnormal condition visible in the data above.")
+    return "\n\n".join(parts)
+
+
+def _render_history(entries) -> str:
+    """Working memory kiểu SessionMemory pa-model + outcome thật (bps)."""
+    if not entries:
+        return ""
+    lines = ["Your recent decisions this session (most recent last, "
+             "outcome = realized net return of the trade if it closed):"]
+    for e in entries:
+        row = (f"- {e['side']} conf={e['conf']:.2f} -> "
+               f"{'approve' if e['approve'] else 'VETO'} ({e['source']})")
+        if e["reason"]:
+            row += f": {e['reason']}"
+        if e.get("outcome") is not None:
+            row += f" -> outcome {e['outcome'] * 1e4:+.1f}bps"
+        lines.append(row)
+    return "\n".join(lines)
 
 
 class LLMVeto:
     """client inject được để test; mặc định anthropic.Anthropic()
-    (đọc ANTHROPIC_API_KEY từ env)."""
+    (đọc ANTHROPIC_API_KEY từ env).
+
+    Gate 3 tầng trước khi LLM được phán (ý tưởng pa-model, chuyển thể):
+      1. sanity_errors -> veto thẳng (data hỏng thì không trade).
+      2. không có anomaly_flags -> approve thẳng, KHÔNG gọi API — regime
+         bình thường là vùng backtest đã xác nhận edge, veto nhầm ở đây
+         là mất tiền vô ích.
+      3. có cờ -> hỏi LLM, kèm cờ + lịch sử quyết định gần đây.
+    """
 
     def __init__(self, cfg: VetoConfig = VetoConfig(), client=None):
         self.cfg = cfg
@@ -127,15 +169,55 @@ class LLMVeto:
             import anthropic
             client = anthropic.Anthropic(timeout=cfg.timeout_s)
         self.client = client
+        self.history: deque[dict] = deque(maxlen=cfg.history_max)
+        self._counts = {"n_reviews": 0, "n_auto": 0, "n_sanity": 0,
+                        "n_llm_approve": 0, "n_llm_veto": 0, "n_fail_open": 0}
+
+    def stats(self) -> dict:
+        return dict(self._counts)
+
+    def record_outcome(self, net_ret: float) -> None:
+        """Gắn kết quả lệnh vừa đóng vào quyết định approve gần nhất chưa
+        có outcome (1 vị thế tại một thời điểm nên không nhầm lệnh)."""
+        for e in reversed(self.history):
+            if e["approve"] and e.get("outcome") is None:
+                e["outcome"] = float(net_ret)
+                return
 
     def review(self, bars: pd.DataFrame, feat: pd.Series, sig) -> VetoDecision:
+        self._counts["n_reviews"] += 1
         try:
             ctx = build_market_context(bars, feat, sig)
+            errs = sanity_errors(ctx)
+            if errs:
+                self._counts["n_sanity"] += 1
+                d = VetoDecision(approve=False, source="sanity",
+                                 reason="; ".join(errs))
+            else:
+                flags = anomaly_flags(ctx, self.cfg.anomaly)
+                if not flags:
+                    self._counts["n_auto"] += 1
+                    d = VetoDecision(approve=True, source="auto",
+                                     reason="regime bình thường — không hỏi LLM")
+                else:
+                    d = self._ask_llm(ctx, flags)
+        except Exception as e:  # fail-open: baseline là model chạy một mình
+            self._counts["n_fail_open"] += 1
+            d = VetoDecision(approve=True, source="fail_open",
+                             reason=f"fail-open: {type(e).__name__}: {e}")
+        self.history.append({"side": sig.side, "conf": float(sig.conf),
+                             "approve": d.approve, "source": d.source,
+                             "reason": d.reason, "outcome": None})
+        return d
+
+    def _ask_llm(self, ctx: dict, flags: list[str]) -> VetoDecision:
+        try:
             resp = self.client.messages.create(
                 model=self.cfg.model,
                 max_tokens=self.cfg.max_tokens,
                 system=SYSTEM_PROMPT,
-                messages=[{"role": "user", "content": build_prompt(ctx)}],
+                messages=[{"role": "user", "content": build_prompt(
+                    ctx, flags, _render_history(self.history))}],
                 output_config={
                     "format": {"type": "json_schema", "schema": VETO_SCHEMA},
                     "effort": "low",
@@ -144,9 +226,11 @@ class LLMVeto:
             text = next(b.text for b in resp.content
                         if getattr(b, "type", "") == "text")
             data = json.loads(text)
-            return VetoDecision(approve=data["decision"] == "approve",
-                                reason=data["reason"], source="llm")
-        except Exception as e:  # fail-open: baseline là model chạy một mình
-            return VetoDecision(
-                approve=True, source="fail_open",
-                reason=f"fail-open: {type(e).__name__}: {e}")
+            approve = data["decision"] == "approve"
+            self._counts["n_llm_approve" if approve else "n_llm_veto"] += 1
+            return VetoDecision(approve=approve, reason=data["reason"],
+                                source="llm")
+        except Exception as e:
+            self._counts["n_fail_open"] += 1
+            return VetoDecision(approve=True, source="fail_open",
+                                reason=f"fail-open: {type(e).__name__}: {e}")

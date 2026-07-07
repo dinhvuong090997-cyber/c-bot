@@ -135,6 +135,8 @@ class DemoRunner:
             print(f"  >> {ev}")
             if ev["event"] in ("exited", "time_exit"):
                 self.rm.on_exit(int(bar["t_close"]), ev["pnl_approx"])
+                if self.veto is not None:  # session memory học kết quả thật
+                    self.veto.record_outcome(ev["pnl_approx"])
             elif ev["event"] == "entry_cancelled":
                 self.rm.on_exit(int(bar["t_close"]), 0.0)  # giải phóng slot
 
@@ -165,7 +167,8 @@ class DemoRunner:
         if self.veto is not None:
             d = self.veto.review(self.bars, feat, sig)
             self._jlog("veto", {"approve": d.approve, "reason": d.reason,
-                                "source": d.source, "side": sig.side})
+                                "source": d.source, "side": sig.side,
+                                "stats": self.veto.stats()})
             if not d.approve:
                 print(f"LLM VETO {sig.side} conf={sig.conf:.2f}: {d.reason}")
                 return
