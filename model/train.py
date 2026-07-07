@@ -27,6 +27,7 @@ class TrainConfig:
     dropout: float = 0.2
     seed: int = 42
     device: str = ""            # "" = tự chọn cuda nếu có
+    class_weight: str = ""      # "" = không; "balanced" = trọng số nghịch tần suất train
 
 
 def train_model(X_train: np.ndarray, y_train: np.ndarray,
@@ -37,7 +38,12 @@ def train_model(X_train: np.ndarray, y_train: np.ndarray,
 
     net = DirectionNet(X_train.shape[1], hidden=cfg.hidden, dropout=cfg.dropout).to(dev)
     opt = torch.optim.Adam(net.parameters(), lr=cfg.lr, weight_decay=cfg.weight_decay)
-    loss_fn = nn.CrossEntropyLoss()
+    if cfg.class_weight == "balanced":
+        counts = np.bincount(y_train, minlength=3).astype(np.float64)
+        w = counts.sum() / (3 * counts)
+        loss_fn = nn.CrossEntropyLoss(weight=torch.tensor(w, dtype=torch.float32).to(dev))
+    else:
+        loss_fn = nn.CrossEntropyLoss()
 
     train_dl = DataLoader(
         TensorDataset(torch.from_numpy(X_train), torch.from_numpy(y_train)),
