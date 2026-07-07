@@ -165,10 +165,38 @@ dương thật chỉ từ threshold **0.50** (Sharpe ~1.0, win rate 58%, nhưng 
 ~1.5 lệnh/ngày, n=190 — mẫu còn mỏng, chưa đủ tin cậy để live). Dưới 0.40,
 phí ăn hết edge.
 
+## Bước 6 — Demo-live trên Bybit Demo Trading
+
+Vòng lặp live: WS publicTrade → `DollarBarBuilder` (tái dùng nguyên class
+batch, stateful sẵn) → 29 features (golden-test khớp bit với batch) →
+model → risk gate → lệnh **post-only maker** kèm TP/SL sàn tự quản.
+
+```bash
+# chạy thử không cần key (fill giả, chỉ xem pipeline):
+uv run python -m live.run_demo --dry-run
+
+# demo thật (tiền ảo, giá mainnet): tạo API key trong Demo Trading
+# trên bybit.com rồi:
+export BYBIT_DEMO_API_KEY=...  BYBIT_DEMO_API_SECRET=...
+uv run python -m live.run_demo --threshold 0.45 --qty 0.001
+```
+
+- Warmup 51 bars (~2–4h với bar $10M) trước tín hiệu đầu tiên.
+- Mọi event (signal/fill/cancel/exit) ghi JSONL vào `out/demo/` — **mục
+  tiêu của demo là đo fill-rate maker và adverse selection**, không phải
+  PnL (vài tuần không đủ mẫu).
+- Risk hard rules (`risk/rules.py`): 1 vị thế, mặc định 30 lệnh/ngày,
+  kill switch vĩnh viễn khi lỗ ngày ≥2% (restart tay mới chạy lại).
+- Entry post-only chưa khớp sau 3 bars → hủy. Hết horizon (80 bars) còn
+  vị thế → market close (time-exit).
+- Lý do chọn maker: backtest 2026-07-07 cho thấy với phí taker 0.11%
+  edge chết dưới threshold 0.45, còn phí maker 0.04% thì vùng 0.40–0.50
+  dương rộng (xem `tools/exp_lgbm_vs_final.py`).
+
 ## Test
 
 ```bash
-uv run pytest tests/ -q        # 87 tests, TDD toàn bộ, ~36s
+uv run pytest tests/ -q        # 129 tests, TDD toàn bộ
 ```
 
 ## Việc còn lại (chưa làm)
@@ -181,5 +209,8 @@ uv run pytest tests/ -q        # 87 tests, TDD toàn bộ, ~36s
   scratchpad (hiện tại `bars/pipeline.py` là logic core, nhưng script
   Kaggle runner riêng vẫn ở ngoài repo)
 - `llm/`: prompt + parse cho lớp veto
-- `risk/`: hard rules (position size, max drawdown, ...)
-- `execution/`, `live/`: để sau, ngoài scope v1
+- Đối chiếu fill thật từ `/v5/execution/list` với journal (hiện pnl trong
+  journal là proxy theo close bar) — script phân tích fill-rate sau 1-2
+  tuần demo
+- Retrain trên 6 năm data (2020–2026) khi backfill xong, kèm walk-forward
+  + CUSUM event sampling trước khi tin kết quả
