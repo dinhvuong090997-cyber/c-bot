@@ -1,0 +1,57 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")"
+config_dir="$HOME/.config/fxpro-openapi"
+mkdir -p "$config_dir"
+chmod 700 "$config_dir"
+if [[ "${1:-}" == start ]]; then
+  if podman container exists fxpro-openapi-auth; then
+    podman start fxpro-openapi-auth >/dev/null
+    printf 'Trang kết nối: http://localhost:8787/\n'
+    exit 0
+  fi
+  podman run --detach --name fxpro-openapi-auth --userns=keep-id \
+    -e DOTNET_CLI_HOME=/tmp -e XAU_CONFIG_DIR=/config \
+    -v "$PWD:/src:z" -v "$config_dir:/config:z" \
+    -p 127.0.0.1:8787:8787 -w /src \
+    mcr.microsoft.com/dotnet/sdk@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5 \
+    dotnet bin/Debug/net8.0/FxProOpenApi.dll connect >/dev/null
+  printf 'Trang kết nối: http://localhost:8787/\n'
+  exit 0
+fi
+mounts=(-v "$PWD:/src:z" -v "$config_dir:/config:z" -v "$PWD/../cbot:/cbot:ro,z")
+options=(--rm --userns=keep-id -e DOTNET_CLI_HOME=/tmp -e XAU_CONFIG_DIR=/config)
+if [[ "${1:-}" == setup ]]; then options+=(-it); fi
+if [[ "${1:-}" == connect ]]; then options+=(-p 127.0.0.1:8787:8787); fi
+if [[ "${1:-}" == ui || "${1:-}" == worker ]]; then
+  podman run "${options[@]}" "${mounts[@]}" -w /src \
+    mcr.microsoft.com/dotnet/sdk@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5 \
+    dotnet build FxProOpenApi.csproj --nologo >/dev/null
+  if podman container exists fxpro-execution; then
+    podman start fxpro-execution >/dev/null
+  else
+    podman run --detach --name fxpro-execution --userns=keep-id \
+      -e DOTNET_CLI_HOME=/tmp -e XAU_CONFIG_DIR=/config \
+      "${mounts[@]}" -w /src \
+      mcr.microsoft.com/dotnet/sdk@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5 \
+      dotnet bin/Debug/net8.0/FxProOpenApi.dll worker >/dev/null
+  fi
+  if [[ "${1:-}" == worker ]]; then
+    printf 'Execution service ready. Start trading explicitly from the dashboard.\n'
+    exit 0
+  fi
+  if podman container exists fxpro-dashboard; then
+    podman start fxpro-dashboard >/dev/null
+  else
+    podman run --detach --name fxpro-dashboard --userns=keep-id \
+      -e DOTNET_CLI_HOME=/tmp -e XAU_CONFIG_DIR=/config \
+      "${mounts[@]}" -p 127.0.0.1:8788:8788 -w /src \
+      mcr.microsoft.com/dotnet/sdk@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5 \
+      dotnet bin/Debug/net8.0/FxProOpenApi.dll dashboard >/dev/null
+  fi
+  printf 'Dashboard: http://localhost:8788/\n'
+  exit 0
+fi
+exec podman run "${options[@]}" "${mounts[@]}" -w /src \
+  mcr.microsoft.com/dotnet/sdk@sha256:1b955f179b02df4f0eb5fadedaa898cbe44d620a64aab52eec72c8e91d1355b5 \
+  dotnet run --project FxProOpenApi.csproj -- "$@"

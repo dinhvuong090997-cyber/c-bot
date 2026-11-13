@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+umask 077
+config_dir="$HOME/.config/fxpro-cbot"
+mkdir -p -- "$config_dir"
+read -rp 'Email cTrader ID: ' ctid
+read -rp 'Số tài khoản FxPro cTrader demo: ' account
+read -rp 'Mã vàng trên FxPro [GOLD]: ' symbol
+if [[ -z "$ctid" || ! "$account" =~ ^[0-9]+$ ]]; then
+  printf 'Cần email cTrader ID và số tài khoản dạng chữ số.\n' >&2
+  exit 2
+fi
+config_tmp=$(mktemp "$config_dir/account.XXXXXX")
+printf '%s\n' "$ctid" "$account" "${symbol:-GOLD}" > "$config_tmp"
+mv -- "$config_tmp" "$config_dir/account.conf"
+printf 'Đã lưu cấu hình tài khoản.\n'

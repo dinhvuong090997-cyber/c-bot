@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+cd -- "$(dirname -- "$0")"
+image=ghcr.io/spotware/ctrader-console@sha256:6a339e15ee895de270be4a4e293fdb3f2fcdbecfbbace460105703125742e5ad
+algo=/algo/FxProGoldMomentum.algo
+mode="${1:-metadata}"
+if [[ $# -gt 0 ]]; then shift; fi
+mounts=(-v "$PWD/bin/Release/net6.0:/algo:z")
+if [[ "$mode" == metadata ]]; then
+  exec podman run --rm --userns=keep-id "${mounts[@]}" "$image" metadata "$algo"
+fi
+if [[ "$mode" != backtest && "$mode" != run ]]; then
+  printf 'Usage: %s [metadata|backtest|run]\n' "$0" >&2
+  exit 2
+fi
+config_dir="$HOME/.config/fxpro-cbot"
+if [[ -r "$config_dir/account.conf" ]]; then
+  mapfile -t account_config < "$config_dir/account.conf"
+  CTID="${CTID:-${account_config[0]:-}}"
+  CTRADER_ACCOUNT="${CTRADER_ACCOUNT:-${account_config[1]:-}}"
+  CTRADER_SYMBOL="${CTRADER_SYMBOL:-${account_config[2]:-}}"
+fi
+CTRADER_PASSWORD_FILE="${CTRADER_PASSWORD_FILE:-$config_dir/ctrader.pwd}"
+: "${CTID:?Set the cTrader ID}"
+: "${CTRADER_ACCOUNT:?Set the FxPro demo account number}"
+: "${CTRADER_PASSWORD_FILE:?Set the path to a private local cTrader password file}"
+: "${CTRADER_SYMBOL:?Set the FxPro gold symbol as shown on the demo account}"
+password_file=$(realpath -e -- "$CTRADER_PASSWORD_FILE")
+if [[ ! -f "$password_file" || ! -r "$password_file" || $(stat -c '%a' -- "$password_file") != 600 ]]; then
+  printf 'Use a readable password file with permissions 600.\n' >&2
+  exit 2
+fi
+mkdir -p "$PWD/reports/runtime" "$PWD/reports/data"
+mounts+=(-v "$password_file:/run/secrets/ctrader.pwd:ro,Z" -v "$PWD/reports:/reports:z")
+exec podman run --rm --userns=keep-id -e XDG_DOCUMENTS_DIR=/reports/runtime "${mounts[@]}" "$image" "$mode" "$algo" \
+  --ctid="$CTID" --pwd-file=/run/secrets/ctrader.pwd --account="$CTRADER_ACCOUNT" \
+  --symbol="$CTRADER_SYMBOL" --period=m1 "$@"

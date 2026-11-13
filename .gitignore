@@ -1,8 +1,30 @@
-data/cache/
-kernel_features/cbot_features.py
-out/
-*.pyc
+# Local credentials and environment
+.env
+.env.*
+!.env.example
+*.pwd
+app.json
+tokens.json
+phone-pairing.json
+execution-config.json
+execution-risk-*.json
+research-preset.json
+*.sock
+# Generated runtime/build caches
+**/bin/
+**/obj/
 **/__pycache__/
-__pycache__/
-tmp_dl/
-.venv/
+**/.cache/
+**/.config/
+**/.dotnet/
+**/.local/
+**/.nuget/
+*.pyc
+*.log
+*.bak
+# Broker data, reports and private QA evidence stay on this machine
+**/data/
+**/reports/
+**/audit/
+*.csv
+/strategytune-*.jpg
