@@ -41,3 +41,13 @@ Inspect Git status, read these docs, and check service heartbeat before changing
 ## Preview consolidation verification
 
 Build and UI Stop/routing checks passed. HTTP checks confirmed preview HTML/status, rejection of preview POSTs, and independent normal-mode status. Dashboard-only restart preserved execution PID, config revision and active state. No broker control action was performed. Playwright on the shared-port preview passed all chart/replay/navigation checks with zero console errors or browser POSTs. Browser QA uses the existing 8788 service and requires no preview container. The user asked to simplify the number of ports; keep routine access on the dashboard URL.
+
+## Canonical project move — 2026-11-13
+
+The user requested moving the repo out of the generated Codex workspace. Its canonical location is now `/home/fiaboo/Projects/xauusd-system` (`~/Projects/xauusd-system`); open that folder directly next session. All source, `.git`, tick data, reports and private QA artifacts moved together by same-filesystem rename, without copying or dropping data. Credentials remain outside the repo in their original private config directory.
+
+The old workspace `work/xauusd-system` is a compatibility symlink. Existing execution/dashboard/OAuth container definitions still name that path; their live bind mounts retain the same directory inode. Keep the old symlink until those containers are deliberately recreated with canonical mounts during planned maintenance. No worker restart or trading control action occurred during this move. New containers launched from the canonical repo path use the new paths.
+
+Updated the phone gateway user service ExecStart to the canonical source path and ran daemon-reload without restarting the gateway, preserving paired sessions. Added `~/Projects/xauusd-news` as a symlink to the original optional historical dataset so sibling research paths continue to resolve. The original dataset itself was not moved.
+
+Verification: Git head preserved; worker PID, active state and execution revision unchanged; gateway PID unchanged. Dashboard, read-only preview and phone gateway assets/pair page responded successfully; market feed connected. A temporary container using the new canonical bind mounts passed the fake backtest checks and was removed automatically. UI Stop/routing regression checks passed from the new directory. No physical phone interaction or real trading order was part of this migration verification.

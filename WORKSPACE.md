@@ -2,7 +2,7 @@
 
 ## Project and repository
 
-Project root: `work/xauusd-system/` relative to the Codex workspace. Git remote: https://github.com/dinhvuong090997-cyber/c-bot (private), default branch `master`.
+Canonical project root on this machine: `/home/fiaboo/Projects/xauusd-system` (`~/Projects/xauusd-system`). Open this directory directly in future Codex sessions. Git remote: https://github.com/dinhvuong090997-cyber/c-bot (private), default branch `master`.
 
 The current machine runs Linux with rootless Podman. This workspace tool shell is Bash; the user's interactive terminal may use Fish. GitHub writes currently use the connected GitHub plugin, account `dinhvuong090997-cyber`. GitHub CLI and local Git credential helper were absent at the last check. Do not infer browser login from plugin login.
 
@@ -50,3 +50,9 @@ Tick cache: `openapi/data/`. Reports: `openapi/reports/`. Private QA screenshots
 ## GitHub workflow
 
 The local repository is a shallow checkout of the published commit, with `origin/master` tracking it. Prefer normal Git when authenticated; the connected GitHub plugin can create blobs/tree/commit and update the branch with an expected SHA. Verify the remote head and tree after publishing. Do not force-reset/reinitialize this checkout or replace remote content again unless the user requests it.
+
+## Local path migration
+
+The repo was moved on the same filesystem to `~/Projects/xauusd-system` without restarting execution. The old Codex workspace path remains a compatibility symlink because existing Podman container mount definitions reference it; active mounts still point to the same directory inode. Do not remove that symlink until every dependent container has been recreated with canonical mounts during planned maintenance. New containers started through `openapi/api` from the canonical directory use the new paths. The phone gateway systemd ExecStart uses the canonical path; daemon-reload was sufficient, preserving paired sessions.
+
+The optional historical `~/Projects/xauusd-news` path is a symlink to the original sibling research dataset; its files were not moved or copied. This keeps the existing research scripts usable.
