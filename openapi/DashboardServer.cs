@@ -20,7 +20,6 @@ static class DashboardServer
     static ExecutionClient Bot = null!;
     static MarketMonitor Market = null!;
     static string Assets = "dashboard";
-    static bool ReadOnly;
     static readonly string Reports = Path.GetFullPath("reports");
     static async Task Send(HttpListenerResponse response, object value, int status = 200)
     {
@@ -47,7 +46,7 @@ static class DashboardServer
         }
         return list.OrderByDescending(r => r.Item2.GetProperty("generatedUtc").GetDateTimeOffset()).ToList();
     }
-    static async Task<object> Status()
+    static async Task<object> Status(bool readOnly=false)
     {
         var files = Directory.Exists("data/fxpro-v2") ? Directory.GetFiles("data/fxpro-v2", "XAUUSD-*.csv.gz").Where(p => Regex.IsMatch(Path.GetFileName(p), @"^XAUUSD-\d{4}-\d{2}-\d{2}\.csv\.gz$")).Order().ToArray() : Array.Empty<string>();
         string? lastExport = File.Exists("export-v2.log") ? File.ReadLines("export-v2.log").LastOrDefault() : null;
@@ -62,7 +61,7 @@ static class DashboardServer
         object[] jobs;
         lock (Jobs) jobs = Jobs.Values.ToArray();
         var execution = await Bot.Snapshot();
-        return new { readOnly=ReadOnly, serverUtc = DateTimeOffset.UtcNow, bot = execution.Active ? "running" : "idle", ordersEnabled = execution.Active && execution.Status.State == "running", execution,
+        return new { readOnly, serverUtc = DateTimeOffset.UtcNow, bot = execution.Active ? "running" : "idle", ordersEnabled = execution.Active && execution.Status.State == "running", execution,
             authorized,
             dataDays = files.Length, targetDays = 120, firstDay = files.FirstOrDefault() is { } f ? Path.GetFileName(f)[7..17] : null,
             lastDay = files.LastOrDefault() is { } l ? Path.GetFileName(l)[7..17] : null,
@@ -145,9 +144,11 @@ static class DashboardServer
         {
             if (request.Url?.Host is not ("localhost" or "127.0.0.1")) { await Send(response, new { error = "Invalid host." }, 403); return; }
             var path = request.Url.AbsolutePath;
+            bool preview = path == "/preview" || path.StartsWith("/preview/", StringComparison.Ordinal);
+            if(preview)path=path.Length==8?"/":path[8..];
             if (request.HttpMethod == "POST")
             {
-                if(ReadOnly){await Send(response,new {error="Read-only preview. Bot controls and saved data are unchanged."},403);return;}
+                if(preview){await Send(response,new {error="Read-only preview. Bot controls and saved data are unchanged."},403);return;}
                 var origin = request.Headers["Origin"];
                 if (request.Headers["X-CSRF-Token"] != Nonce || origin != request.Url.GetLeftPart(UriPartial.Authority) || request.ContentType?.Split(';')[0] != "application/json")
                 { await Send(response, new { error = "Invalid request origin or session." }, 403); return; }
@@ -193,7 +194,7 @@ static class DashboardServer
                 return;
             }
             if (request.HttpMethod != "GET") { await Send(response, new { error = "Method not allowed." }, 405); return; }
-            if (path == "/api/status") { await Send(response, await Status()); return; }
+            if (path == "/api/status") { await Send(response, await Status(preview)); return; }
             if (path == "/api/session") { await Send(response, new { csrf = Nonce }); return; }
             if (path == "/api/execution/accounts") { await Send(response, await Bot.Accounts()); return; }
             if (path == "/api/execution") { await Send(response, await Bot.Snapshot()); return; }
@@ -254,14 +255,13 @@ static class DashboardServer
         catch { await Send(response, new { error = "This request could not be completed. Check the local service or reconnect cTrader." }, 503); }
         finally { response.Close(); }
     }
-    public static async Task Run(string privateDirectory,int port=8788,bool readOnly=false)
+    public static async Task Run(string privateDirectory)
     {
         PrivateDirectory = privateDirectory;
-        ReadOnly=readOnly;
         Bot = new ExecutionClient(privateDirectory);
         Market = new MarketMonitor(privateDirectory);
-        using var listener = new HttpListener(); listener.Prefixes.Add($"http://+:{port}/"); listener.Start();
-        Console.WriteLine($"Dashboard: http://localhost:{port}/");
+        using var listener = new HttpListener(); listener.Prefixes.Add("http://+:8788/"); listener.Start();
+        Console.WriteLine("Dashboard: http://localhost:8788/ · read-only preview: /preview/");
         while (true) { var context = await listener.GetContextAsync(); _ = Handle(context); }
     }
 }

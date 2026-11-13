@@ -120,11 +120,6 @@ if (args.FirstOrDefault() == "check-execution-service")
     await ExecutionServiceChecks.Run();
     return;
 }
-if (args.FirstOrDefault() == "dashboard-preview")
-{
-    await DashboardServer.Run(directory,8791,true);
-    return;
-}
 if (args.FirstOrDefault() == "dashboard")
 {
     await DashboardServer.Run(directory);

@@ -1,5 +1,6 @@
 'use strict';
 const $ = id => document.getElementById(id);
+const apiBase=location.pathname==='/preview'||location.pathname.startsWith('/preview/')?'/preview':'';
 const phoneAccess=!['localhost','127.0.0.1'].includes(location.hostname);
 let phoneSession=document.querySelector('meta[name="aurum-phone-session"]')?.content||'';
 if(phoneAccess) {
@@ -23,7 +24,7 @@ async function api(path, options={}) {
   if(phoneAccess&&phoneSession)headers.Authorization='Bearer '+phoneSession;
   const controller=new AbortController(),timer=setTimeout(()=>controller.abort(),options.method==='POST'||path.startsWith('/api/backtest-bars')?100000:15000);
   try {
-    const response=await fetch(path,{cache:'no-store',...options,headers,signal:controller.signal});
+    const response=await fetch(apiBase+path,{cache:'no-store',...options,headers,signal:controller.signal});
     const data=await response.json();
     if(response.status===401&&phoneAccess){try{sessionStorage.removeItem('aurum-phone-session');}catch(_){}location.replace('/pair');}
     if(!response.ok)throw new Error(data.error||'The local service is unavailable.');
@@ -249,7 +250,7 @@ let refreshing=false;
 async function refresh() {
  if(refreshing)return;refreshing=true;const executionVersion=state.executionVersion;
  try {
-  const [status,reports]=await Promise.all([api('/api/status'),api('/api/reports')]);state.status=status;state.readOnly=Boolean(status.readOnly);
+  const [status,reports]=await Promise.all([api('/api/status'),api('/api/reports')]);state.status=status;state.readOnly=Boolean(status.readOnly);if(state.readOnly&&$('notice').hidden)notify('Read-only preview · bot controls and saved settings are disabled.');
   if(executionVersion===state.executionVersion&&!state.executionAction)renderExecution(status.execution);
   $('progress-banner').hidden=!status.jobs.some(j=>j.state==='running');
   $('api-pill').innerHTML=`<i></i>${status.authorized?'API READY':'CONNECT API'}`;$('api-pill').classList.toggle('warning',!status.authorized);$('settings-access').textContent=status.authorized?'Authorized':'Not connected';

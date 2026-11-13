@@ -29,11 +29,15 @@ Last read-only production check: worker active/running, heartbeat age 0.2s; mark
 
 ## Known follow-ups and limits
 
-1. `openapi/api` currently publishes a port only for OAuth connect/UI paths; `./api dashboard-preview` does not yet map host port 8791 despite the README suggesting it. Fix the wrapper by adding the localhost 8791 mapping for that mode before relying on the documented preview command. Previous browser QA used a dedicated container with explicit port mapping, now removed. The backend preview/read-only behavior itself was tested.
+1. Resolved preview port issue: preview now uses `http://localhost:8788/preview/` in the existing dashboard process. `/preview/api/` is read-only per request; normal `/api/` remains writable with its existing protections. Removed the separate C# preview command/listener; the wrapper alias only prints the URL. No extra container/port is needed. OAuth 8787 stays because its callback is registered with cTrader; 8789 stays as the private Tailscale gateway backend. Do not change the registered redirect URI implicitly.
 2. Physical phone rendering, screen-reader behavior, real partial fills and live-broker failure scenarios were not exercised by this desktop QA. Fake checks cover the existing safety paths.
 3. Historical Python research has external sibling/dataset dependencies; it is not the primary app setup path. Some old CSV results predate sizing corrections and were not regenerated.
 4. Private screenshot/report evidence is intentionally not on GitHub. Do not claim a fresh clone contains the tick cache or completed backtest results.
 
 ## Next session
 
-Inspect Git status, read these docs, and check service heartbeat before changing anything. If the user asks to continue verification, address the preview wrapper port mapping first. Keep changes scoped to the requested service and update this file when done. Never store credentials, account passwords, access/refresh tokens or pairing codes here.
+Inspect Git status, read these docs, and check service heartbeat before changing anything. Preview consolidation is deployed; use the shared-port URL for future QA. Keep changes scoped to the requested service and update this file when done. Never store credentials, account passwords, access/refresh tokens or pairing codes here.
+
+## Preview consolidation verification
+
+Build and UI Stop/routing checks passed. HTTP checks confirmed preview HTML/status, rejection of preview POSTs, and independent normal-mode status. Dashboard-only restart preserved execution PID, config revision and active state. No broker control action was performed. Playwright on the shared-port preview passed all chart/replay/navigation checks with zero console errors or browser POSTs. Browser QA uses the existing 8788 service and requires no preview container. The user asked to simplify the number of ports; keep routine access on the dashboard URL.

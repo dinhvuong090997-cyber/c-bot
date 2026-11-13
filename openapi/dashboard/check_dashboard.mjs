@@ -9,7 +9,7 @@ let now=Date.now();
 class Clock extends Date {static now(){return now;}}
 const state={executionVersion:0,executionAction:null,executionSource:null,run:null,report:{id:'new-report',data:{config:{}}},filtered:[],curve:[],trades:[{entryUtc:'old',net:111}],loadedRun:'old'};
 let aborted=false,cleared=false,timer;
-const context=vm.createContext({$,state,Date:Clock,stamp:String,number:String,money:String,esc:String,setColor(){},periodLabel(){return 'period';},notify(){},AbortController,phoneAccess:false,phoneSession:'',
+const context=vm.createContext({$,state,Date:Clock,stamp:String,number:String,money:String,esc:String,setColor(){},periodLabel(){return 'period';},notify(){},AbortController,apiBase:'',phoneAccess:false,phoneSession:'',
  setTimeout:fn=>{timer=fn;return 1;},clearTimeout:()=>{cleared=true;},
  fetch:(url,{signal})=>new Promise((resolve,reject)=>signal.addEventListener('abort',()=>{aborted=true;reject(new Error('aborted'));})),
  stopReplay(){},fillTradeSelect(){},drawChart(){},renderTrades(){}});
@@ -68,3 +68,12 @@ assert.equal($('bot-pill').textContent,'IDLE');
 assert.equal($('execution-stop').disabled,true);assert.equal($('execution-start').disabled,false);
 assert.equal(state.executionAction,null);
 console.log('Stop UI checks PASS: immediate feedback, STOPPING instead of LIVE, stale refresh ignored, confirmed IDLE.');
+
+// Every preview API request must stay on the server-side read-only route.
+context.apiBase='/preview';let requested;
+context.fetch=async url=>{requested=url;return {ok:true,json:async()=>({readOnly:true})};};
+vm.runInContext(source.slice(source.indexOf('async function api('),source.indexOf('function notify(')),context);
+await vm.runInContext("api('/api/status')",context);
+assert.equal(requested,'/preview/api/status');
+context.apiBase='';await vm.runInContext("api('/api/status')",context);assert.equal(requested,'/api/status');
+console.log('Preview routing checks PASS: shared origin, isolated API prefix.');

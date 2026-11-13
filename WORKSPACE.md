@@ -39,7 +39,7 @@ podman exec fxpro-dashboard dotnet bin/Debug/net8.0/FxProOpenApi.dll check-marke
 node dashboard/check_dashboard.mjs
 ```
 
-These execution checks use fake broker connections. Browser QA is `check_dashboard_browser.mjs`; it refuses a writable production URL. The C# `dashboard-preview` command listens on 8791 and rejects all POSTs, using canonical assets. See the known wrapper port-mapping issue in `MEMORY.md` before launching it.
+These execution checks use fake broker connections. Browser QA is `check_dashboard_browser.mjs`; it refuses a writable production URL. Use `http://localhost:8788/preview/` on the running dashboard. Preview requests use `/preview/api/` and all writes are rejected server-side, without changing normal `/api/` mode. Preview shares the same process, port and canonical assets; there is no 8791 listener/container. `./api dashboard-preview` only prints the URL.
 
 Local Playwright previously used module `/usr/lib/chatgpt/resources/cua_node/lib/node_modules/playwright/index.mjs`, Node `/usr/lib/chatgpt/resources/cua_node/bin/node`, and Chromium `/home/fiaboo/.cache/ms-playwright/chromium-1234/chrome-linux64/chrome`. Override with `PLAYWRIGHT_MODULE` and `CHROMIUM_PATH`; check that these paths still exist. The user authorized local Playwright for UI QA without trading actions.
 
