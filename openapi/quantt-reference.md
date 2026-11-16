@@ -1,0 +1,31 @@
+# Quantt reference review — 2026-11-14
+
+User requested reference https://www.quantt.co.uk/. Read public homepage, syllabus, tools/resources and full public Hurst/Hamilton articles. No paid course access, sign-in, purchase, plugin installation or strategy deployment. This is an education/resource site, not evidence of a profitable XAUUSD PA bot or an installable PA engine.
+
+Sources reviewed:
+- https://www.quantt.co.uk/quantt-syllabus — Systematic Trading: signal construction, bias/overfit/out-of-sample, execution/costs; market microstructure and volatility topics. Public syllabus is an outline, not the complete lessons or implementation.
+- https://www.quantt.co.uk/resources/hurst-exponent-explained — regime use with noisy estimates, sensitivity to window/frequency/estimator; one input, not standalone signal. Do not copy example thresholds as established XAUUSD calibration.
+- https://www.quantt.co.uk/resources/regime-switching-model-hamilton — distinguishes filtered from full-sample smoothed inference, warns that fitted state labels/means can be unstable, requires executable out-of-sample evaluation. Article is secondary exposition; any later Hamilton implementation must verify original Hamilton paper and official statsmodels docs before use. No fitted regime model added (user currently wants deterministic PA).
+- https://www.quantt.co.uk/tools — educational simulators/editors, not a live XAUUSD data/orderflow provider. No strategy performance independently verified.
+
+Our proposed application (inference, not a Quantt strategy): separate direction (confirmed swings/breaks), clock-time volatility (tick/M1 returns, spread relative to recent movement) and location (price within established range/zone). Range-bar amplitude is constrained by its construction and overshoots: bar duration/event rate carry clock-time information that a fixed range alone does not. Use deterministic trailing computations with explicit unknown/transition states; no ML is required for this first design. Do not infer real trade volume, institutional flow or orderbook depth from quote ticks.
+
+Before another entry filter, audit existing PA setups with future outcomes used ONLY as labels: MAE/MFE at predeclared horizons and first passage of3R versusSL, segmented by session and regime defined using only information available at entry. Freeze rules before new testing, reserve fresh data, account for overlapping labels/serial dependence and repeated trials. Do not select a regime simply because its hindsight label includes winners. Keep current3R requirement; no artificial target extension or threshold tuning to force trades. This is a research proposal, not implemented or tested; no improvement claim.
+
+The prior backtest establishes only that the current full toolkit did not trade and ungated nearest-swing targeting lost on tested Jan–Apr data. It does not establish that no PA strategy can work, that the regime alone is responsible, or that adding Hurst/Hamilton solves it. Next meaningful measurement is why entry/stop/target geometry leaves too little executable reward, not a promise of another indicator's edge.
+
+## Resources-specific follow-up
+
+User pointed directly at /resources. Inspected index and read additional public guides (not the entire library):
+- https://www.quantt.co.uk/resources/triple-barrier-method — first profit/stop/time exit, causal barrier inputs, touch-order/fill ambiguity, overlapping events and diagnostics. Most relevant next tool: an offline event-outcome audit that needs no trained model. Our proposed3R vsSL/time audit is an adaptation; it must not silently replace the live or existing PA exit policy or force TP further away.
+- https://www.quantt.co.uk/resources/purged-cross-validation — interval overlap, purging vs embargo, walk-forward vs training on both sides; purge is not independence and embargo is not universally1%. Any future implementation should verify book/official references, not copy article snippets blindly.
+- https://www.quantt.co.uk/resources/bid-ask-spread-explained — educational spread/execution explanation; no example instrument spread used as FxPro XAUUSD calibration. Our own recorded sides/fills remain source of costs.
+- https://www.quantt.co.uk/resources/momentum-trading-guide and https://www.quantt.co.uk/resources/mean-reversion-trading-guide — strategy-family references, not proof that current session signal or PA zones have an edge. Compare families only via predeclared rules and consistent executable cost assumptions.
+
+Priority proposal: audit all causal PA confirmations (including those blocked by3R/regime) as observational events; freeze entry availability, actual SL, hypothetical3R level and fixed horizon at event. Label first touch with tick Bid/Ask, plus MAE/MFE; keep hypothetical3R diagnostic distinct from swing-target strategy P&L. Handle end-of-data censoring/weekend spans and quote gaps explicitly. Cluster/measure overlapping paths rather than count correlated events as independent. Then inspect outcomes conditioned on pre-entry direction/clock-volatility/location. No implementation/backtest or trading change in this reference-only follow-up.
+
+## Tools-specific follow-up
+
+User supplied /tools. Read index and individual Monte Carlo Simulator, Python Playground and Probability Visualizer pages. Monte Carlo offers GBM/OU/jump-diffusion artificial paths with manual parameters; useful educational model exploration, not a gold regime detector, real-price backtest or validated stress test of our PA strategy. Python Playground advertises coding challenges (Sharpe/binomial/pairs), not a broker-data integration. Probability Visualizer shows standard Normal/Binomial/Poisson distributions, not calibrated PA-win probabilities. No interactive simulation run, upload or third-party data transmission was performed.
+
+Own inference: borrow the explainable interactive-tool format for an Aurum research panel, but use recorded FxPro event outcomes with firstSL/TP/time, MAE/MFE and costs. If Monte Carlo is later added, predeclare purpose/calibration/dependence assumptions and distinguish synthetic-path experiments from actual backtests. No new implementation authorized by merely sharing this tools URL.

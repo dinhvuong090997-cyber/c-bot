@@ -28,3 +28,6 @@ research-preset.json
 **/audit/
 *.csv
 /strategytune-*.jpg
+
+# Local recorded PA chart snapshots, not source assets
+/openapi/dashboard/assets/range-pa-*.json

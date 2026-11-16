@@ -11,7 +11,7 @@ if(phoneAccess) {
   if(phoneSession&&location.pathname==='/pair')history.replaceState(null,'','/#backtests');
 }
 
-const state = {reports:[], report:null, run:null, curve:[], trades:[], mode:'equity', page:'backtests', tradePage:0, csrf:'', status:null, preset:null, pendingJob:null, userReport:false, execution:null, executionSource:null, executionVersion:0, executionAction:null, readOnly:false, market:null, baseBars:new Map(), historyVersion:'', livePeriod:5, btPeriod:5, selectedTrade:-1, priceBars:[], priceTicket:0, priceKey:'', replayTimer:null};
+const state = {reports:[], report:null, run:null, curve:[], trades:[], mode:'equity', page:'backtests', tradePage:0, csrf:'', status:null, preset:null, pendingJob:null, userReport:false, execution:null, executionSource:null, executionVersion:0, executionAction:null, readOnly:false, market:null, baseBars:new Map(), historyVersion:'', livePeriod:5, btPeriod:5, selectedTrade:-1, priceBars:[], priceTicket:0, priceKey:'', replayTimer:null, paManifest:null, paData:null, paKey:''};
 const money = (n, digits=2) => n==null?'—':new Intl.NumberFormat('en-US',{style:'currency',currency:'USD',minimumFractionDigits:digits,maximumFractionDigits:digits}).format(n ?? 0);
 const number = (n, digits=1) => n==null?'—':new Intl.NumberFormat('en-US',{maximumFractionDigits:digits}).format(n ?? 0);
 const esc = v => String(v ?? '').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
@@ -55,7 +55,7 @@ function fullRange(report) {
  const runs=report.data.results;return {start:runs.map(r=>r.startUtc).sort()[0],end:runs.map(r=>r.endUtcExclusive).sort().at(-1)};
 }
 function chooseReport(id) {
-  state.report=state.reports.find(r=>r.id===id)||state.reports.find(r=>r.id==='fxpro-20260101-20260501')||state.reports[0]||null;
+  state.report=state.reports.find(r=>r.id===id)||state.reports[0]||null;
   const empty=!state.report;$('empty-state').hidden=!empty;$('result-content').hidden=empty;
   if(empty){state.run=null;state.loadedRun=null;state.trades=[];state.curve=[];$('export-button').disabled=true;renderTrades();return;}
   $('report-select').value=state.report.id;
@@ -113,7 +113,9 @@ async function selectRun(run) {
 let liveChart,backtestChart;
 function drawChart() {
  if(!backtestChart||!state.run||!state.loadedRun)return;
- const price=state.mode==='price';$('price-controls').hidden=!price;$('replay-controls').hidden=true;
+ const price=state.mode==='price',pa=state.mode==='pa';$('pa-controls').hidden=!pa;$('pa-scope').hidden=!pa;$('backtest-strategy').hidden=pa;$('pa-inspector').hidden=!pa;$('pa-summary').hidden=$('pa-zones').hidden=!pa;$('price-controls').hidden=!price;$('replay-controls').hidden=true;
+ if(pa){loadRangePA();return;}
+ $('curve-subtitle').textContent=periodLabel(state.run.startUtc,state.run.endUtcExclusive)+' · '+money(state.run.initial,0);
  if(price){loadTradePrice();return;}
  stopReplay();$('backtest-chart-message').hidden=true;
  const run=state.run;let peak=run.initial;
@@ -153,12 +155,42 @@ function renderTradePrice(reset=false){
  $('replay-time').textContent=`${state.replayCursor+1} / ${state.priceBars.length} bars · ${stamp(last.time*1000)} UTC`;
  backtestChart.onHover=d=>{$('chart-value').textContent=number(d.close,2)+' USD/oz';};
 }
+async function loadRangePA(){
+ const ticket=++state.priceTicket;stopReplay();$('backtest-chart-title').textContent='Range PA · supply & demand';$('backtest-chart-message').hidden=false;$('backtest-chart-message').textContent='Loading recorded range bars and rule-based PA…';
+ try{
+  if(!state.paManifest){const manifest=await api('/assets/range-pa-index.json');if(ticket!==state.priceTicket||state.mode!=='pa')return;state.paManifest=manifest;const dates=[...new Set(manifest.entries.map(e=>e.date))].sort().reverse();fillSelect($('pa-date'),dates.map(d=>[d,d]),dates[0]);}
+  const date=$('pa-date').value,size=Number($('pa-size').value),entry=state.paManifest.entries.find(e=>e.date===date&&e.rangeUsdOz===size);
+  if(!entry||!/^range-pa-\d{4}-\d{2}-\d{2}-r[235]\.json$/.test(entry.file))throw new Error('No recorded PA snapshot for this selection.');
+  if(state.paKey!==entry.file){const data=await api('/assets/'+entry.file);if(ticket!==state.priceTicket||state.mode!=='pa')return;state.paData=data;state.paKey=entry.file;state.replayCursor=Math.max(0,data.bars.length-1);}
+  $('replay-cursor').max=Math.max(0,state.paData.bars.length-1);$('replay-cursor').value=state.replayCursor;renderRangePA(true);
+ }catch(e){if(ticket===state.priceTicket){$('backtest-chart-message').hidden=false;$('backtest-chart-message').textContent=e.message;}}
+}
+function renderRangePA(reset=false){
+ if(!state.paData)return;const frame=rangePAFrame(state.paData,state.replayCursor),last=frame.bars.at(-1);$('backtest-chart-message').hidden=Boolean(last);if(!last){$('backtest-chart-message').textContent='No closed range bars in this snapshot.';return;}
+ const toolkit=paToolkitFrame(state.paData,frame.bars),structure=toolkit.structure,setup=toolkit.setup,show=$('pa-structure-toggle').checked;
+ $('focus-pa-setup').disabled=!state.paData.events.some(e=>e.kind==='confirmed');
+ const levels=show?structure.pivots.filter((p,i,all)=>!all.slice(i+1).some(n=>n.type===p.type)).map(p=>({price:p.price,title:'Swing '+p.label,color:'#a6b7cc'})):[];
+ backtestChart.rangeCandles(frame.bars,frame.zones,[...frame.markers,...(show?toolkit.markers:[])],{reset,levels});
+ $('pa-regime').textContent=structure.regime;
+ $('pa-structure-evidence').textContent=structure.reason;
+ $('pa-swing-levels').textContent='Strict 2-left / 2-right pivots · HH / LH highs · HL / LL lows. BOS = close beyond swing; Shift = opposite break.';
+ $('pa-setup-status').textContent=setup?(setup.eligible?'Candidate ≥3R':'Blocked')+' · '+setup.side+' · '+stamp(setup.utc)+' UTC':'No PA confirmation in this context';
+ $('pa-setup-levels').textContent=setup?`Bid-close ${number(setup.entry,2)} · SL ${number(setup.stop,2)} · swing TP ${setup.target===null?'none':number(setup.target,2)} · RR ${setup.rr===null?'—':number(setup.rr,2)+'R'}`:'Waiting for a zone retest and rejection.';
+ $('pa-setup-reason').textContent=setup?setup.reason:'Pivots appear only after two right bars close. Context resets after day/gap changes.';$('chart-value').textContent=number(last.close,2)+' USD/oz';$('chart-date').textContent=stamp(last.endUtc)+' UTC';$('curve-subtitle').textContent=state.paData.date+' · recorded snapshot · independent of selected backtest';
+ $('curve-legend').textContent=`Range $${state.paData.rangeUsdOz}/oz · equal bar spacing · UTC on hover · threshold overshoot retained`;
+ $('replay-controls').hidden=false;$('replay-time').textContent=`${state.replayCursor+1} / ${state.paData.bars.length} bars · ${stamp(last.endUtc)} UTC`;
+ const count=kind=>frame.zones.filter(z=>z.state===kind).length;
+ $('pa-summary').textContent=`D = Demand · S = Supply · ${frame.zones.length} zones known · ${count('created')} fresh · ${count('retest')} retesting · ${count('confirmed')} PA confirmed. PA markers are observations, not executed orders.`;
+ $('pa-zones').replaceChildren(...frame.zones.slice(-4).reverse().map(z=>{const tag=document.createElement('span');tag.className='pa-zone-tag '+(z.long?'demand':'supply');tag.textContent=`${z.long?'Demand':'Supply'} ${number(z.low,2)}–${number(z.high,2)} · ${z.label}`;return tag;}));
+ backtestChart.onHover=d=>{$('chart-value').textContent=number(d.close,2)+' USD/oz';const b=state.paData.bars[d.time-1];if(b)$('chart-date').textContent=stamp(b.endUtc)+' UTC';};
+}
+function renderReplay(reset){if(state.mode==='pa')renderRangePA(reset);else renderTradePrice(reset);}
 function filteredTrades() {return state.trades.filter(t=>($('trade-session').value==='all'||t.session===$('trade-session').value)&&($('trade-side').value==='all'||t.side===$('trade-side').value));}
 function renderTrades() {
  const trades=filteredTrades(),size=20,pages=Math.max(1,Math.ceil(trades.length/size));state.tradePage=Math.max(0,Math.min(state.tradePage,pages-1));
  const selected=trades.slice(state.tradePage*size,(state.tradePage+1)*size);
  $('trades-body').innerHTML=selected.map(t=>`<tr tabindex="0" data-trade="${state.trades.indexOf(t)}"><td>${esc(stamp(t.entryUtc))}</td><td>${t.session==='NewYork'?'New York':esc(t.session)}</td><td class="${t.side==='BUY'?'positive':'negative'}">${esc(t.side)}</td><td>${number(t.volumeOz,0)}</td><td>${number(t.Entry??t.entry,2)}</td><td>${number(t.exit,2)}</td><td>${money(t.commission)}</td><td>${money(t.swap)}</td><td class="${t.net<0?'negative':'positive'}">${money(t.net)}</td><td>${esc(t.reason)}</td></tr>`).join('')||'<tr><td colspan="10">No matching trades.</td></tr>';
- for(const row of $('trades-body').querySelectorAll('[data-trade]')){const choose=()=>{state.selectedTrade=Number(row.dataset.trade);$('selected-trade').value=String(state.selectedTrade);state.mode='price';navigate('backtests');for(const b of document.querySelectorAll('[data-curve]'))b.classList.toggle('active',b.dataset.curve==='price');drawChart();};row.onclick=choose;row.onkeydown=e=>{if(e.key==='Enter'){choose();}};}
+ for(const row of $('trades-body').querySelectorAll('[data-trade]')){const choose=()=>{state.selectedTrade=Number(row.dataset.trade);$('selected-trade').value=String(state.selectedTrade);state.mode='price';state.priceKey='';navigate('backtests');for(const b of document.querySelectorAll('[data-curve]'))b.classList.toggle('active',b.dataset.curve==='price');drawChart();};row.onclick=choose;row.onkeydown=e=>{if(e.key==='Enter'){choose();}};}
  $('trade-page-label').textContent=`${trades.length} trades · Page ${state.tradePage+1} of ${pages}`;$('trades-prev').disabled=state.tradePage===0;$('trades-next').disabled=state.tradePage>=pages-1;
 }
 function exportTrades() {
@@ -260,7 +292,7 @@ async function refresh() {
   $('progress-detail').textContent=running?`${running.start} → ${running.end} · RR 1:${running.rr}`:complete?'Results include costs and risk controls. Review before execution.':`FxPro XAUUSD · completed through ${status.lastDay??'—'}`;
   $('progress-count').textContent=`${Math.min(status.dataDays,120)} / 120 days`;$('progress-fill').style.width=Math.min(100,status.dataDays/120*100)+'%';
   const changed=reports.map(r=>r.id).join('|')!==state.reports.map(r=>r.id).join('|');state.reports=reports;$('report-count').textContent=reports.length;
-  if(changed){const old=state.report?.id;fillSelect($('report-select'),reports.map(r=>{const range=fullRange(r);return [r.id,(r.id.startsWith('custom')?'RR 1:'+r.data.results[0].rr+' · risk '+r.data.results[0].riskPercent+'% · min SL $'+(r.data.config?.MinimumStop??r.data.config?.minimumStop??2):'FxPro')+' · '+periodLabel(range.start,range.end)];}),old);chooseReport(!state.userReport&&reports.some(r=>r.id==='fxpro-20260101-20260501')?'fxpro-20260101-20260501':old);}
+  if(changed){const old=state.report?.id;fillSelect($('report-select'),reports.map(r=>{const range=fullRange(r);return [r.id,(r.id.startsWith('custom')?'RR 1:'+r.data.results[0].rr+' · risk '+r.data.results[0].riskPercent+'% · min SL $'+(r.data.config?.MinimumStop??r.data.config?.minimumStop??2):'FxPro')+' · '+periodLabel(range.start,range.end)];}),old);chooseReport(state.userReport?old:reports[0]?.id);}
   if(!reports.length){$('empty-state').hidden=false;$('result-content').hidden=true;}
   if(state.pendingJob){const job=status.jobs.find(j=>j.id===state.pendingJob);if(job?.state==='completed'){state.userReport=true;chooseReport(job.id);notify('Backtest complete. Select the run to inspect its trades.');state.pendingJob=null;navigate('backtests');}else if(job?.state==='failed'){notify('Backtest failed. Check the configuration and available data.',true);state.pendingJob=null;}}
  }catch(e){if(executionVersion===state.executionVersion&&!state.executionAction){$('bot-pill').textContent='DISCONNECTED';$('bot-pill').classList.add('idle');notify('Dashboard disconnected. The execution service may still be running.',true);}}
@@ -269,7 +301,10 @@ async function refresh() {
 for(const button of document.querySelectorAll('[data-page]'))button.onclick=()=>navigate(button.dataset.page);
 $('execution-settings').onclick=()=>navigate('settings');$('report-select').onchange=()=>{state.userReport=true;chooseReport($('report-select').value);};
 for(const id of ['period-select','capital-select','cost-select'])$(id).onchange=chooseFilters;
-for(const button of document.querySelectorAll('[data-curve]'))button.onclick=()=>{state.mode=button.dataset.curve;for(const other of document.querySelectorAll('[data-curve]'))other.classList.toggle('active',other===button);drawChart();};
+for(const button of document.querySelectorAll('[data-curve]'))button.onclick=()=>{state.mode=button.dataset.curve;state.priceKey='';state.paKey='';for(const other of document.querySelectorAll('[data-curve]'))other.classList.toggle('active',other===button);drawChart();};
+$('focus-pa-structure').onclick=()=>{backtestChart.chart.timeScale().setVisibleLogicalRange({from:Math.max(0,backtestChart.data.length-80),to:backtestChart.data.length+3});};
+$('focus-pa-setup').onclick=()=>{const e=state.paData?.events.filter(e=>e.kind==='confirmed').at(-1);if(!e)return;stopReplay();state.replayCursor=e.barIndex-1;$('replay-cursor').value=state.replayCursor;renderRangePA(true);};
+$('pa-structure-toggle').onchange=()=>{if(state.mode==='pa')renderRangePA();};
 for(const id of ['trade-session','trade-side'])$(id).onchange=()=>{state.tradePage=0;renderTrades();};
 $('trades-prev').onclick=()=>{state.tradePage--;renderTrades();};$('trades-next').onclick=()=>{state.tradePage++;renderTrades();};
 $('export-button').onclick=exportTrades;$('refresh-account').onclick=()=>loadAccount(true);
@@ -385,12 +420,13 @@ for(const button of document.querySelectorAll('[data-live-period]'))button.oncli
 $('fit-live').onclick=()=>liveChart.fit();$('fit-backtest').onclick=()=>backtestChart.fit();
 $('selected-trade').onchange=()=>{state.selectedTrade=Number($('selected-trade').value);state.priceKey='';drawChart();};
 $('backtest-period').onchange=()=>{state.btPeriod=Number($('backtest-period').value);state.priceKey='';drawChart();};
-$('replay-cursor').oninput=()=>{stopReplay();state.replayCursor=Number($('replay-cursor').value);renderTradePrice(true);};
+$('pa-date').onchange=$('pa-size').onchange=()=>{state.paKey='';drawChart();};$('fit-pa').onclick=()=>backtestChart.fit();$('focus-pa').onclick=()=>backtestChart.focusPA();
+$('replay-cursor').oninput=()=>{stopReplay();state.replayCursor=Number($('replay-cursor').value);renderReplay(true);};
 $('replay-play').onclick=()=>{
- if(state.replayTimer){stopReplay();return;}if(!state.priceBars.length)return;
- if(state.replayCursor>=state.priceBars.length-1)state.replayCursor=0;
+ if(state.replayTimer){stopReplay();return;}const length=state.mode==='pa'?(state.paData?.bars.length||0):state.priceBars.length;if(!length)return;
+ if(state.replayCursor>=length-1)state.replayCursor=0;
  $('replay-play').textContent='Pause replay';
- state.replayTimer=setInterval(()=>{state.replayCursor++;if(state.replayCursor>=state.priceBars.length-1){state.replayCursor=state.priceBars.length-1;stopReplay();}$('replay-cursor').value=state.replayCursor;renderTradePrice(false);},400);
+ state.replayTimer=setInterval(()=>{state.replayCursor++;if(state.replayCursor>=length-1){state.replayCursor=length-1;stopReplay();}$('replay-cursor').value=state.replayCursor;renderReplay(false);},400);
 };
 window.addEventListener('focus',()=>{refresh();loadMarket();});
 document.addEventListener('visibilitychange',()=>{if(!document.hidden){refresh();loadMarket();}});

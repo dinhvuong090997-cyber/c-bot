@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import {mkdir,writeFile} from 'node:fs/promises';
+const {chromium}=await import(process.env.PLAYWRIGHT_MODULE||'playwright');
+const url=process.env.DASHBOARD_URL||'http://127.0.0.1:8788/preview/';
+assert(new URL(url).pathname.startsWith('/preview'),'Read-only preview required');
+const output=process.env.QA_OUTPUT||'audit/range-pa-ui';await mkdir(output,{recursive:true});
+const browser=await chromium.launch({headless:true,executablePath:process.env.CHROMIUM_PATH||undefined});
+const page=await browser.newPage({viewport:{width:1440,height:1100}});const errors=[],posts=[];
+page.on('pageerror',e=>errors.push(e.message));page.on('console',m=>{if(m.type()==='error')errors.push(m.text());});page.on('request',r=>{if(r.method()==='POST')posts.push(r.url());});
+try{
+ await page.goto(url+'#backtests');await page.waitForFunction(()=>document.querySelector('#metric-pnl').textContent!=='—');
+ assert.equal((await (await page.request.get(new URL('api/status',url).href)).json()).readOnly,true);
+ await page.locator('[data-curve="pa"]').click();await page.waitForFunction(()=>!document.querySelector('#replay-controls').hidden&&!document.querySelector('#pa-summary').hidden,{},{timeout:30000});
+ await page.waitForFunction(()=>document.querySelector('.pa-overlay rect'));
+ assert(await page.locator('#pa-regime').isVisible());
+ assert((await page.locator('#pa-structure-evidence').textContent()).length>10);
+ assert((await page.evaluate(()=>backtestChart.levels.length))>0,'confirmed swing levels shown');
+ await page.locator('#pa-structure-toggle').uncheck();assert.equal(await page.evaluate(()=>backtestChart.levels.length),0);
+ await page.locator('#pa-structure-toggle').check();assert((await page.evaluate(()=>backtestChart.levels.length))>0);
+ await page.locator('#replay-cursor').fill('2');await page.locator('#replay-cursor').dispatchEvent('input');
+ assert.equal(await page.locator('#pa-regime').textContent(),'Unknown');
+ const end=await page.evaluate(()=>state.paData.bars.length-1);await page.locator('#replay-cursor').fill(String(end));await page.locator('#replay-cursor').dispatchEvent('input');
+ assert.equal(await page.locator('#pa-date option').count(),3);await page.screenshot({path:output+'/range-pa-1440.png'});
+ await page.locator('#focus-pa-structure').click();await page.screenshot({path:output+'/pa-structure-1440.png'});
+ await page.locator('#focus-pa-setup').click();assert((await page.locator('#pa-setup-status').textContent()).startsWith('Blocked'));
+ assert((await page.locator('#pa-setup-levels').textContent()).includes('SL'));await page.screenshot({path:output+'/pa-setup-1440.png'});
+ const created=await page.evaluate(()=>state.paData.events.find(e=>e.kind==='created'));
+ const prior=await page.evaluate(utc=>state.paData.bars.findIndex(b=>Date.parse(b.endUtc)>=Date.parse(utc))-1,created.utc);
+ await page.locator('#replay-cursor').fill(String(prior));await page.locator('#replay-cursor').dispatchEvent('input');await page.waitForTimeout(150);
+ assert.equal(await page.evaluate(()=>backtestChart.paZones.length),0,'no zone before first confirmation');
+ await page.locator('#replay-cursor').fill(String(prior+1));await page.locator('#replay-cursor').dispatchEvent('input');await page.waitForTimeout(150);
+ assert((await page.evaluate(()=>backtestChart.paZones.length))>0,'zone appears when confirmed');
+ await page.locator('#replay-play').click();await page.waitForTimeout(500);await page.locator('#replay-play').click();assert(Number(await page.locator('#replay-cursor').inputValue())>prior+1);
+ for(const size of ['2','5','3']){await page.locator('#pa-size').selectOption(size);await page.waitForFunction(s=>state.paData?.rangeUsdOz===Number(s)&&!document.querySelector('#replay-controls').hidden,size);}
+ await page.locator('#pa-date').selectOption('2026-04-29');await page.waitForFunction(()=>state.paData?.date==='2026-04-29');await page.locator('#fit-pa').click();
+ await page.setViewportSize({width:1280,height:900});await page.waitForTimeout(250);assert.equal(await page.evaluate(()=>document.documentElement.scrollWidth>innerWidth),false);await page.screenshot({path:output+'/range-pa-1280.png'});
+ await page.locator('[data-curve="equity"]').click();assert(await page.locator('#pa-controls').isHidden());assert.equal(await page.evaluate(()=>backtestChart.rangeAxis),false);
+ await page.locator('[data-curve="price"]').click();await page.waitForFunction(()=>state.mode==='price'&&!document.querySelector('#replay-controls').hidden,{},{timeout:90000});assert.equal(await page.evaluate(()=>backtestChart.rangeAxis),false);
+ assert.deepEqual(posts,[]);assert.deepEqual(errors,[]);console.log('Range PA browser PASS: causal replay, event overlays, dates/ranges, fit,1280px and existing chart modes; no POSTs/errors.');
+}finally{await writeFile(output+'/results.json',JSON.stringify({errors,posts},null,2));await browser.close();}

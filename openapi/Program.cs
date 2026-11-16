@@ -8,8 +8,15 @@ using System.Text.Json;
 const string Redirect = "http://localhost:8787/callback";
 var directory = Environment.GetEnvironmentVariable("XAU_CONFIG_DIR")
     ?? Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.UserProfile), ".config", "fxpro-openapi");
-Directory.CreateDirectory(directory);
-File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+if (args.FirstOrDefault() is "record-data" or "archive-data")
+{
+    if (!Directory.Exists(directory)) throw new DirectoryNotFoundException("Recorder needs existing private credentials.");
+}
+else
+{
+    Directory.CreateDirectory(directory);
+    File.SetUnixFileMode(directory, UnixFileMode.UserRead | UnixFileMode.UserWrite | UnixFileMode.UserExecute);
+}
 var configPath = Path.Combine(directory, "app.json");
 var tokenPath = Path.Combine(directory, "tokens.json");
 var jsonOptions = new JsonSerializerOptions { WriteIndented = true };
@@ -95,9 +102,60 @@ if (args.FirstOrDefault() == "check-execution")
     await ExecutionChecks.Run();
     return;
 }
+if (args.FirstOrDefault() == "audit-pa-paths")
+{
+    PaPathAudit.Run(args);
+    return;
+}
+if (args.FirstOrDefault() == "check-trailing")
+{
+    SwingTrailing.Checks();
+    return;
+}
+if (args.FirstOrDefault() == "check-pa-paths")
+{
+    PaPathAudit.Checks();
+    return;
+}
+if (args.FirstOrDefault() == "check-pa-toolkit")
+{
+    PaToolkitChecks.Run();
+    if (args.Length == 3) PaToolkitChecks.ExportParity(args[1], args[2]);
+    return;
+}
+if (args.FirstOrDefault() == "archive-data")
+{
+    await TickArchive.Run(directory);
+    return;
+}
+if (args.FirstOrDefault() == "check-archive")
+{
+    await TickArchiveChecks.Run();
+    return;
+}
+if (args.FirstOrDefault() == "check-recorder")
+{
+    await RecorderChecks.Run();
+    return;
+}
+if (args.FirstOrDefault() == "record-data")
+{
+    await DataRecorder.Run(directory, args);
+    return;
+}
 if (args.FirstOrDefault() == "check-market")
 {
     await MarketChecks.Run();
+    return;
+}
+if (args.FirstOrDefault() == "export-range-pa")
+{
+    RangePaSnapshot.Export(args);
+    return;
+}
+if (args.FirstOrDefault() == "export-kronos")
+{
+    KronosResearch.Export(args);
     return;
 }
 if (args.FirstOrDefault() == "check-backtest")

@@ -19,8 +19,12 @@ The current machine runs Linux with rootless Podman. This workspace tool shell i
 
 - `fxpro-execution`: trading worker, private Unix socket. Closing/restarting the dashboard does not stop this worker. No automatic trading activation after its own restart.
 - `fxpro-dashboard`: HTTP on `127.0.0.1:8788`.
+- User service `fxpro-data-recorder.service` / `fxpro-recorder` container: independent read-only live tick journal and hourly history recovery. See `openapi/data-recorder.md`; isolated runtime, never restart execution for data changes.
+- User service `fxpro-tick-archive.service`: bulk read-only history downloader, current-year gaps then older interval scan. `./api archive-status`; see `openapi/tick-archive.md`. Independent of live recording/trading.
 - `fxpro-openapi-auth`: OAuth UI on `127.0.0.1:8787`.
-- `fxpro-tailscale` and user service `fxpro-dashboard-phone.service`: private tailnet HTTPS, gateway on `127.0.0.1:8789`. No public Funnel.
+- Native system `tailscaled` and user service `fxpro-dashboard-phone.service`: private tailnet HTTPS, gateway on `127.0.0.1:8789`. No public Funnel.
+
+Phone dashboard access: `https://fiaboo.mining-cobia.ts.net` now opens directly on allowed tailnet devices, no manual pairing key (`XAU_PHONE_TAILNET_ONLY=1`). Loopback gateway still enforces Host/Origin/CSRF and internal browser sessions. `/pair` is a compatibility entry to the same dashboard.
 
 Private state is under `~/.config/fxpro-openapi/`: application credentials, OAuth tokens, execution config/risk journal, Unix socket and phone pairing data. Never print or commit those values. Pairing codes are not source code. Read-only monitoring does not alter account routing.
 

@@ -1,6 +1,7 @@
 #!/usr/bin/env python3
-"""Private phone access through rootless Tailscale Serve; never enables Funnel."""
+"""Private phone access through the host Tailscale Serve; never enables Funnel."""
 import json
+import getpass
 import os
 from pathlib import Path
 import re
@@ -10,17 +11,13 @@ import tempfile
 import time
 import urllib.request
 
-IMAGE = 'ghcr.io/tailscale/tailscale@sha256:72c1e19e0aedca96b8533bbb0b4368564410ff20b17e53b804eb6c1f04a31be4'
-NAME = 'fxpro-tailscale'
 CONFIG = Path.home() / '.config/fxpro-openapi'
-STATE = CONFIG / 'tailscale'
-SOCKET = '/var/lib/tailscale/tailscaled.sock'
 
 def run(args, capture=False, **kwargs):
     return subprocess.run(args, check=True, text=True, capture_output=capture, **kwargs)
 
 def ts(*args, capture=False):
-    return run(['podman', 'exec', NAME, 'tailscale', '--socket=' + SOCKET, *args], capture=capture)
+    return run(['tailscale', *args], capture=capture)
 
 def private(path, text):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -34,23 +31,12 @@ def private(path, text):
     finally:
         if os.path.exists(temporary): os.unlink(temporary)
 
-def ensure():
-    STATE.mkdir(mode=0o700, parents=True, exist_ok=True)
-    if subprocess.run(['podman', 'container', 'exists', NAME]).returncode:
-        run(['podman', 'run', '--detach', '--name', NAME, '--userns=keep-id', '--network=host',
-             '--restart=unless-stopped', '-v', str(STATE) + ':/var/lib/tailscale:Z',
-             '--entrypoint', '/usr/local/bin/tailscaled', IMAGE, '--tun=userspace-networking',
-             '--state=/var/lib/tailscale/tailscaled.state', '--socket=' + SOCKET])
-    else:
-        run(['podman', 'start', NAME], capture=True)
-
 def main():
     action = sys.argv[1] if len(sys.argv) == 2 else ''
     if action not in ('login', 'enable', 'status'):
         raise SystemExit('Usage: python3 phone_tailscale.py login|enable|status')
-    ensure()
     if action == 'login':
-        ts('up', '--hostname=aurum-desk', '--accept-dns=false', '--accept-routes=false', '--timeout=10s')
+        ts('up', '--timeout=10s')
         return
     status = json.loads(ts('status', '--json', capture=True).stdout)
     dns = status.get('Self', {}).get('DNSName', '').rstrip('.')
@@ -60,9 +46,12 @@ def main():
     if status['BackendState'] != 'Running' or not re.fullmatch(r'[a-z0-9.-]+\.ts\.net', dns):
         raise SystemExit('Complete Tailscale login and enable MagicDNS, then rerun enable.')
     # Configure the encrypted entry point before moving the existing LAN gateway.
-    ts('serve', '--yes', '--bg', '--https=443', 'http://127.0.0.1:8789')
+    try:
+        ts('serve', '--yes', '--bg', '--https=443', 'http://127.0.0.1:8789')
+    except subprocess.CalledProcessError:
+        raise SystemExit('Host Tailscale Serve needs administrator permission. Run sudo tailscale set --operator=' + getpass.getuser() + ', then rerun enable. Gateway configuration was not changed.')
     origin = 'https://' + dns
-    private(CONFIG / 'phone-tailscale.env', 'XAU_PHONE_BIND=127.0.0.1\nXAU_PHONE_ORIGIN=' + origin + '\n')
+    private(CONFIG / 'phone-tailscale.env', 'XAU_PHONE_BIND=127.0.0.1\nXAU_PHONE_ORIGIN=' + origin + '\nXAU_PHONE_TAILNET_ONLY=1\n')
     unit = Path.home() / '.config/systemd/user/fxpro-dashboard-phone.service.d/50-tailscale.conf'
     private(unit, '[Service]\nEnvironmentFile=' + str(CONFIG / 'phone-tailscale.env') + '\n')
     run(['systemctl', '--user', 'daemon-reload'])
@@ -77,6 +66,6 @@ def main():
             if attempt == 39: raise
             time.sleep(.25)
     print('Phone dashboard: ' + origin + '/pair')
-    print('Use the same Tailscale account on the phone; pair again. The old LAN port is no longer exposed.')
+    print('Open directly from an allowed tailnet device; no pairing key. The gateway remains loopback-only.')
 
 if __name__ == '__main__': main()

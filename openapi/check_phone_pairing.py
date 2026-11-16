@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Regression checks for native phone forms, with no cookies and no broker writes."""
+"""Legacy paired-mode checks only (XAU_PHONE_TAILNET_ONLY off); not for keyless production."""
 from pathlib import Path
 import json
 import os

@@ -109,9 +109,9 @@ The first upgrade from the combined process requires stopping the old worker, re
 
 ## Audit fixes and private phone access
 
-Phone access now uses **https://aurum-desk.mining-cobia.ts.net/pair** through Tailscale Serve. Both devices must use the same tailnet. The Python gateway binds only to 127.0.0.1:8789 and accepts the configured HTTPS origin, Secure cookies, and the existing bearer/CSRF checks. The old 192.168.1.81:8789 LAN URL is closed. No Funnel or public Internet endpoint is enabled.
+Phone access now uses **https://fiaboo.mining-cobia.ts.net/pair** through Tailscale Serve. Both devices must use the same tailnet. The Python gateway binds only to 127.0.0.1:8789 and accepts the configured HTTPS origin, Secure cookies, and the existing bearer/CSRF checks. The old 192.168.1.81:8789 LAN URL is closed. No Funnel or public Internet endpoint is enabled.
 
-`python3 phone_tailscale.py login` starts the pinned official Tailscale image in userspace mode and prints its login link. It does not change Fedora DNS or routes. After login, `python3 phone_tailscale.py enable` configures HTTPS Serve and the gateway user-service environment; `status` prints only state and phone URL. Private Tailscale state is under `~/.config/fxpro-openapi/tailscale`. Install Tailscale on the phone and sign in to the same account.
+`python3 phone_tailscale.py login` uses the existing native Tailscale daemon. After login, `python3 phone_tailscale.py enable` configures HTTPS Serve and the gateway user-service environment; `status` prints only state and phone URL. Native Tailscale manages its system state; old container state is retained only for rollback. Install Tailscale on the phone and sign in to the same account.
 
 Regression checks now cover queued Stop versus Start, accepted/partial/full-fill and protection-order events, durable pending-order resolution after fresh protection checks, and account cache identity. `node dashboard/check_dashboard.mjs` checks request timeout, heartbeat expiry without responses, clearing previous trades, and ignoring late responses. `python3 ../check_research_sizing.py` verifies that the older Python studies size from signal prices rather than future fills; regenerate their old CSV results before comparing them. Their previous CSVs were not rewritten. The C# RR5 strategy/results are unchanged.
 
@@ -124,3 +124,56 @@ Run `./api check-execution`, `./api check-execution-service`, `./api check-backt
 For desktop browser QA, use http://localhost:8788/preview/ on the running dashboard (all preview POSTs rejected), then run `node check_dashboard_browser.mjs` from this directory with Playwright/Chromium installed. Optional `PLAYWRIGHT_MODULE`, `CHROMIUM_PATH`, `DASHBOARD_URL` and `QA_OUTPUT` override module, executable, preview URL and evidence output. The test requires an authorized account and completed local reports/tick data. It refuses the writable root dashboard. Preview uses the same process, port and `dashboard/` assets; no preview container/listener is needed. `./api dashboard-preview` only prints this URL for compatibility.
 
 Cached data/reports are intentionally retained locally during cleanup. Do not delete `bin/` while running containers use its DLLs. Build caches (`obj/`), Python caches, temporary logs and old source copies can be regenerated.
+
+
+## Research-only M5 confirmation
+
+`./api backtest 2026-01-01 2026-05-01 --compare-pa-m5` compares every original scenario with an otherwise identical M5-filtered scenario. Add `--config FILE` to compare one existing research configuration. Default comparison reports use a separate `-pa-m5` directory; `--output DIR` can select a private research directory.
+
+The filter requires the immediately preceding UTC-aligned five-minute **bid** candle to close above its open for BUY, or below for SELL. Doji blocks both. Current-candle prices never confirm entries. Candles must have observations within five seconds of both boundaries; skipped buckets and partial startup candles do not confirm. This checks boundary coverage, not every internal tick gap. Confirmation is rechecked at the delayed entry quote. Spread, session, sizing, costs, exits and drawdown rules remain unchanged. This is a direction-only candle experiment, not an engulfing/pin-bar or Asia-breakout strategy.
+
+Comparison reports are marked `researchOnly` and rejected by execution config mapping. No UI or live execution filter is enabled. A fresh initial balance is needed when comparing later subperiods after an earlier drawdown halt. Existing Jan–Apr 2026 data has already been researched; it is not pristine unseen validation.
+
+
+## SMC research branch
+
+`./api backtest START END --config CONFIG.json --compare-smc --output OUTPUT` runs baseline, M5 direction, M5 structure break, sweep and FVG-formation filters at configured slippage and 2x slippage. Requires a custom config with slippage > 0 and <= 1; do not combine `--compare-pa-m5`. The default output directory ends in `-smc`; reports are research-only and cannot be applied to execution. Existing live strategy and canonical dashboard remain unchanged. See [research results](smc-research.md) and [observational indicator design](SPEC-SMC.md). No SMC chart overlay or live signal integration is deployed.
+
+
+## Range-bar supply/demand PA (offline only)
+
+`./api backtest START END --config FILE --compare-range-pa --output DIR` compares range sizes 2/3/5 USD/oz at fixed RR2 and R3 at RR5 with the Asia baseline, at configured and 2x slippage. `--compare-range-hl` instead targets the known departure high for demand or departure low for supply; the R3/RR5 variant remains a fixed-target control. Do not combine comparison flags. Both require a custom config and slippage >0 and <=1. Default artifacts go under ignored `audit/`, not the dashboard report collection. While demo runs, build to `/tmp/pa-bin` in an offline container rather than overwriting runtime binaries.
+
+These are real-price threshold range bars, not exact-size synthetic gap-fill bars. See [range PA design and all results](range-pa-research.md). High/low runs report `rr:null` because RR varies, with actual initial RR and zone/target evidence in `*-range-details.json`. Read the dedicated Markdown report; canonical dashboard and generic `make_report.py` do not present variable-RR range research. No range bar chart, strategy or execution config is deployed. Research-only reports cannot be applied to the worker.
+
+Add `--require-3r` to `--compare-range-hl` to reject entries with actual rounded TP/SL reward/risk below3, using the delayed executable entry after spread/slippage. It applies only to the high/low variants; baseline and fixed-RR control stay unchanged. This geometric RR does not subtract commission/swap, which remain in net P&L. Runs expose `minimumEntryRR` and `skippedRR`, use separate names/directories and never alter the saved worker config.
+
+
+## Kronos-small offline pilot
+
+`export-kronos START END OUTPUT.json` exports causal H1 Bid bars/session cutoffs through the existing quote reader. `kronos_probe.py ROOT` runs reviewed pinned local model/tokenizer code and safetensors in a separate CPU container. Missing volume/amount is zero-filled per upstream OHLC-only API. `python3 -B check_kronos.py` checks preparation causality without ML dependencies. `backtest START END --config FILE --kronos-signals forecasts.json --output DIR` replays full baseline, forecast-coverage control and agreement filter at configured/2x slippage. It requires custom config and cannot combine comparison flags. Forecast timestamps/source cutoffs are validated; default reports are private audit artifacts and research-only. Do not attach this pilot to the trading worker. See [all results, pinned versions and limitations](kronos-research.md).
+
+
+## Rule-based PA overlay on recorded range bars
+
+Backtests → Range PA shows supply/demand rectangles and retest/confirmation/invalidation markers computed by the shared range engine. Date/range selection, Latest zone/Fit all and causal bar replay are read-only. Initial snapshots cover Apr28–30,2026 at $2/$3/$5; data JSONs under dashboard/assets are ignored and regenerated by `export-range-pa START END dashboard/assets` (up to3days). No live range feed or trading activation is added. See [chart behavior and verification](range-pa-chart.md).
+
+Host Tailscale migration: `phone_tailscale.py` now uses the existing system Tailscale daemon and never creates a container. `status` is read-only. If Serve permission is denied, an administrator must run `sudo tailscale set --operator=fiaboo` before `python3 phone_tailscale.py enable`. Migration completed: native HTTPS verified, old container stopped with restart disabled. The old container URL is retired.
+
+## Continuous live data recorder
+
+`./api recorder` installs/starts the independent read-only XAUUSD collector; `./api recorder-status` reads its coverage and freshness. It journals live sides, recovers settled UTC hours after outages and publishes complete daily gzip caches without replacing existing reports/data or restarting trading. See [data-recorder.md](data-recorder.md) for paths, recovery, startup and limitations. The current PA chart is still recorded research.
+
+PA toolkit offline comparison: `backtest START END --config FILE --compare-pa-toolkit --output DIR`; see [pa-toolkit-backtest.md](pa-toolkit-backtest.md). This uses confirmed swing targets and optional regime/minimum3R, separate from legacy departure-high/low tests. All comparison reports are research-only.
+
+Bulk historical XAUUSD data: `./api archive` enables the independent resumable downloader; `./api archive-status` shows progress. It preserves existing data/metadata, fills current-year gaps then scans older intervals without assuming a retention cutoff. See [tick-archive.md](tick-archive.md).
+
+User-supplied Quantt Mathematics/Finance PDFs were reviewed; [quantt-cheatsheet-notes.md](quantt-cheatsheet-notes.md) records applicable ideas, limitations and implementation status.
+
+PA event outcome audit (not trading P&L): `audit-pa-paths START END OUTPUT` with frozen5/30minute horizons; see [pa-path-audit.md](pa-path-audit.md). Uses all confirmations and separately labels hypothetical3R vsSL vs time without changing the real swing-target strategy.
+
+Swing trailing research: add `--trail-swings` to `--compare-pa-toolkit` for paired static/trailing comparisons. See [pa-trailing-research.md](pa-trailing-research.md); no execution activation.
+
+## Direct Tailscale access (no pairing key)
+
+The phone gateway now uses `XAU_PHONE_TAILNET_ONLY=1` behind native HTTPS Tailscale Serve. Open https://fiaboo.mining-cobia.ts.net directly; `/pair` also opens the dashboard. Tailnet network access replaces manual key entry; ephemeral secure browser/bearer sessions are created automatically, while Host/Origin and backend CSRF validation remain. This mode refuses plain LAN/non-HTTPS/non-ts.net configuration. Legacy pairing remains the default when the flag is absent. `check_phone_tailnet.py` uses a fake upstream and tests keyless/expiry/cookie/webview access, legacy form replay, guards and invalid deployment config. Existing `check_phone_pairing.py` applies only to a legacy paired-mode test gateway.

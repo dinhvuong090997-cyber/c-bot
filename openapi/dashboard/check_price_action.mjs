@@ -1,0 +1,40 @@
+import assert from 'node:assert/strict';
+import vm from 'node:vm';
+import {readFile} from 'node:fs/promises';
+const context=vm.createContext({window:{}});
+try{vm.runInContext(await readFile(new URL('./assets/price-action.js',import.meta.url),'utf8'),context);}catch(e){throw new Error('PA toolkit implementation missing: '+e.message);}
+const {paStructure,paSetup}=context.window;
+const bars=values=>values.map((close,i)=>({time:i+1,open:close,close,high:close+.4,low:close-.4,startUtc:new Date(1000*i).toISOString(),endUtc:new Date(1000*i+500).toISOString()}));
+const b=bars([1,2,5,3,2,1,2,6,3,2,1.5,2,7,4,3]);
+assert.equal(paStructure(b.slice(0,4)).pivots.length,0,'Two right bars required');
+assert.equal(paStructure(b.slice(0,5)).pivots[0].index,3);
+assert.equal(paStructure(b.slice(0,5)).pivots[0].knownIndex,5);
+assert.equal(paStructure(b).regime,'Uptrend');
+assert(paStructure(b).breaks.some(e=>e.direction==='up'));
+const prefix=JSON.stringify(paStructure(b.slice(0,8)));
+assert.equal(JSON.stringify(paStructure(b,7)),prefix,'Future bars cannot alter a replay frame');
+const gap=bars([1,2,5,3,2]);gap[4].startUtc=new Date(120000).toISOString();gap[4].endUtc=new Date(120500).toISOString();
+assert.equal(paStructure(gap).pivots.length,0,'Gap resets pending pivots');
+assert.equal(paStructure(bars([1,2,5,5,2,1,2])).pivots.length,0,'Tied highs are not strict pivots');
+const structure={regime:'Uptrend',pivots:[{type:'high',price:112},{type:'high',price:109}]};
+const setup=paSetup({long:true,low:97.3,high:99},100,3,structure);
+assert.equal(setup.target,109,'Nearest valid known high is used');assert.equal(setup.rr,3);assert.equal(setup.eligible,true);
+assert.equal(paSetup({long:true,low:97.3,high:99},100,3,{...structure,pivots:[{type:'high',price:108.99}]}).eligible,false);
+assert.equal(paSetup({long:true,low:97.3,high:99},100,3,{regime:'Uptrend',pivots:[]}).target,null);
+const sell=paSetup({long:false,low:101,high:102.7},100,3,{regime:'Downtrend',pivots:[{type:'low',price:91}]});assert.equal(sell.eligible,true);assert.equal(sell.rr,3);
+assert.equal(paSetup({long:true,low:97.3,high:99},100,3,{...structure,regime:'Downtrend'}).eligible,false);
+console.log('PA toolkit PASS: confirmation, trend, breaks, ties, causality, gaps, mirrored3R/target/trend gates.');
+
+const snapshot={rangeUsdOz:3,bars:b,events:[{kind:'confirmed',utc:b[7].endUtc,barIndex:8,zone:{long:true,low:1,high:2}}]};
+const frame=context.window.paToolkitFrame(snapshot,b.slice(0,9));
+const extended={...snapshot,events:[...snapshot.events,{kind:'confirmed',utc:b[14].endUtc,barIndex:15,zone:{long:false,low:5,high:6}}]};
+assert.equal(JSON.stringify(context.window.paToolkitFrame(extended,b.slice(0,9))),JSON.stringify(frame),'Future confirmation cannot replace historical setup');
+assert.equal(context.window.paToolkitFrame(snapshot,b.slice(0,7)).setup,null,'No setup before PA confirmation');
+const mirrored=b.map(x=>({...x,open:20-x.open,close:20-x.close,high:20-x.low,low:20-x.high}));
+assert.equal(paStructure(mirrored).regime,'Downtrend');assert(paStructure(mirrored).breaks.some(e=>e.direction==='down'));
+console.log('PA setup replay PASS: future confirmations cannot replace prior decisions.');
+
+const broken=[...b,{...b.at(-1),time:16,close:.5,high:3,low:.4,startUtc:new Date(15000).toISOString(),endUtc:new Date(15500).toISOString()}];
+assert.equal(paStructure(broken).regime,'Transition','Close breaking supporting low invalidates uptrend');
+assert.equal(paStructure(broken).breaks.at(-1).kind,'Character shift');
+console.log('PA regime PASS: broken supporting swing changes trend to Transition.');

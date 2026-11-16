@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Paired LAN gateway for the local research dashboard; no public tunnel."""
+"""Private dashboard gateway: explicit tailnet access or legacy paired LAN access."""
 import hashlib
 import hmac
 import http.client
@@ -23,6 +23,9 @@ assert ipaddress.ip_address(BIND).is_private
 assert PUBLIC.netloc and not PUBLIC.username and not PUBLIC.password and not PUBLIC.path and not PUBLIC.query and not PUBLIC.fragment
 if EXTERNAL:
     assert ipaddress.ip_address(BIND).is_loopback and PUBLIC.scheme == 'https' and PUBLIC.hostname.endswith('.ts.net')
+TAILNET_ONLY = os.environ.get('XAU_PHONE_TAILNET_ONLY') == '1'
+if TAILNET_ONLY and (not EXTERNAL or not ipaddress.ip_address(BIND).is_loopback or PUBLIC.scheme != 'https' or not (PUBLIC.hostname or '').endswith('.ts.net')):
+    raise ValueError('Keyless access requires the loopback gateway behind HTTPS Tailscale Serve.')
 HOSTS = {PUBLIC.netloc}
 if ipaddress.ip_address(BIND).is_loopback: HOSTS.add(f'{BIND}:{PORT}')
 COOKIE = 'aurum_phone_ts' if EXTERNAL else 'aurum_phone'
@@ -71,6 +74,14 @@ class Gateway(BaseHTTPRequestHandler):
         return None
     def paired(self):
         return self.session_token() is not None
+    def new_session(self):
+        token = secrets.token_urlsafe(32)
+        with LOCK:
+            now = time.time()
+            for key in list(SESSIONS):
+                if SESSIONS[key] <= now: del SESSIONS[key]
+            SESSIONS[hashlib.sha256(token.encode()).hexdigest()] = now + 86400
+        return token
     def dashboard(self, token=None, cookie=False):
         connection = http.client.HTTPConnection('127.0.0.1', 8788, timeout=15)
         try:
@@ -116,9 +127,13 @@ class Gateway(BaseHTTPRequestHandler):
     def do_GET(self):
         if not self.valid_host(): self.send(403, b'Invalid host.'); return
         if self.path in ('/', '/index.html'):
-            self.dashboard(self.session_token()); return
+            token = self.session_token()
+            if TAILNET_ONLY and not token: token = self.new_session()
+            self.dashboard(token, cookie=TAILNET_ONLY); return
         if self.path == '/pair':
-            self.login(); return
+            if TAILNET_ONLY: self.dashboard(self.new_session(), cookie=True)
+            else: self.login()
+            return
         # Static UI contains no account information; all data endpoints stay protected.
         if self.path in ('/dashboard.css', '/dashboard.js', '/financial-chart.js') or self.path.startswith('/assets/'):
             self.forward(); return
@@ -128,6 +143,8 @@ class Gateway(BaseHTTPRequestHandler):
     def do_POST(self):
         if not self.valid_host():
             self.send(403, b'{"error":"Invalid host."}', 'application/json'); return
+        if TAILNET_ONLY and self.path == '/pair':
+            self.send(405, b'{"error":"Open the dashboard directly; pairing is disabled."}', 'application/json'); return
         origin = self.headers.get('Origin')
         if self.path == '/pair':
             # Native form navigations may omit Origin or send null under privacy policies.
@@ -182,5 +199,6 @@ class Gateway(BaseHTTPRequestHandler):
 class Server(ThreadingHTTPServer):
     daemon_threads = True
 
-print(f'Phone dashboard: {ORIGIN}', flush=True)
-Server((BIND, PORT), Gateway).serve_forever()
+if __name__ == '__main__':
+    print(f'Phone dashboard: {ORIGIN} (tailnet access)' if TAILNET_ONLY else f'Phone dashboard: {ORIGIN} (pairing required)', flush=True)
+    Server((BIND, PORT), Gateway).serve_forever()

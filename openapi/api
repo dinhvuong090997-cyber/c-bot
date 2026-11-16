@@ -5,6 +5,18 @@ if [[ "${1:-}" == dashboard-preview ]]; then
   printf 'Read-only preview: http://localhost:8788/preview/ (start ./api ui first)\n'
   exit 0
 fi
+if [[ "${1:-}" == recorder ]]; then
+  exec python3 recorder_service.py install
+fi
+if [[ "${1:-}" == recorder-status ]]; then
+  exec python3 recorder_service.py status
+fi
+if [[ "${1:-}" == archive ]]; then
+  exec python3 archive_service.py
+fi
+if [[ "${1:-}" == archive-status ]]; then
+  exec python3 archive_service.py status
+fi
 config_dir="$HOME/.config/fxpro-openapi"
 mkdir -p "$config_dir"
 chmod 700 "$config_dir"

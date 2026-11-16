@@ -9,6 +9,7 @@ sealed record ExecutionConfig(string Revision, string Report, string Run, Execut
 {
     public static ExecutionConfig FromReport(string id, JsonElement report, string runName, ExecutionAccount account)
     {
+        if (ExecutionFiles.Flag(report, "researchOnly")) throw new ArgumentException("Research-only reports cannot be applied to execution.");
         var run = report.GetProperty("results").EnumerateArray().SingleOrDefault(r => r.GetProperty("name").GetString() == runName);
         if (run.ValueKind != JsonValueKind.Object) throw new ArgumentException("Select a completed backtest run.");
         var custom = report.TryGetProperty("config", out var c) ? JsonSerializer.Deserialize<ResearchConfig>(c.GetRawText(), ExecutionFiles.Json) : null;
